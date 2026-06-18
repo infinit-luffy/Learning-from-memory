@@ -90,3 +90,38 @@ def _trainable_parameters(components):
         for parameter in module.parameters()
         if parameter.requires_grad
     ]
+
+
+import subprocess
+import sys
+
+
+def test_eval_script_runs_on_default_config():
+    result = subprocess.run(
+        [sys.executable, "scripts/eval_synthetic.py", "--config", "configs/synthetic/sdam.yaml"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "position_mse" in result.stdout
+    assert "memory_dim" in result.stdout
+
+
+def test_train_script_runs_for_one_step():
+    result = subprocess.run(
+        [
+            sys.executable,
+            "scripts/train_synthetic.py",
+            "--config",
+            "configs/synthetic/sdam.yaml",
+            "--steps",
+            "1",
+        ],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "step=1" in result.stdout
+    assert "loss=" in result.stdout
