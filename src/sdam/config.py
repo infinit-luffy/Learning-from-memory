@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, fields
 from pathlib import Path
 
 import yaml
@@ -53,12 +53,23 @@ def load_config(path: str | Path) -> SDAMConfig:
         if section not in raw:
             raise ValueError(f"missing required section: {section}")
 
-    data = DataConfig(**raw["data"])
-    model = ModelConfig(**raw["model"])
-    training = TrainingConfig(**raw["training"])
+    data = _load_section("data", raw["data"], DataConfig)
+    model = _load_section("model", raw["model"], ModelConfig)
+    training = _load_section("training", raw["training"], TrainingConfig)
     config = SDAMConfig(data=data, model=model, training=training)
     _validate_config(config)
     return config
+
+
+def _load_section(section: str, payload: object, config_type):
+    if not isinstance(payload, dict):
+        raise ValueError(f"section {section} must be a mapping")
+
+    for field in fields(config_type):
+        if field.name not in payload:
+            raise ValueError(f"missing required key: {section}.{field.name}")
+
+    return config_type(**payload)
 
 
 def _validate_config(config: SDAMConfig) -> None:
@@ -68,8 +79,12 @@ def _validate_config(config: SDAMConfig) -> None:
         raise ValueError("data.image_size must be positive")
     if config.data.channels <= 0:
         raise ValueError("data.channels must be positive")
+    if config.data.dataset_size <= 0:
+        raise ValueError("data.dataset_size must be positive")
     if config.data.object_size <= 0:
         raise ValueError("data.object_size must be positive")
+    if config.data.clutter_count < 0:
+        raise ValueError("data.clutter_count must be non-negative")
     if config.data.object_size >= config.data.image_size:
         raise ValueError("data.object_size must be smaller than data.image_size")
     if config.data.min_speed <= 0 or config.data.max_speed < config.data.min_speed:
