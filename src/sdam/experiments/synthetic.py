@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Iterator
 
 import torch
 from torch.utils.data import DataLoader
@@ -18,9 +19,14 @@ class SyntheticComponents:
     encoder: SDAMEncoder
     head: PositionVelocityHead
     optimizer: torch.optim.Optimizer
+    loader_iter: Iterator[dict[str, torch.Tensor]] | None = None
+    last_batch_target_position: torch.Tensor | None = None
 
 
 def build_synthetic_components(config: SDAMConfig, seed: int = 0) -> SyntheticComponents:
+    if config.model.q_dim > 0 or config.model.action_dim > 0:
+        raise ValueError("synthetic experiment does not provide q or actions")
+
     dataset_config = SyntheticVideoConfig(
         image_size=config.data.image_size,
         channels=config.data.channels,
@@ -51,10 +57,22 @@ def build_synthetic_components(config: SDAMConfig, seed: int = 0) -> SyntheticCo
     return SyntheticComponents(config=config, loader=loader, encoder=encoder, head=head, optimizer=optimizer)
 
 
+def _next_batch(components: SyntheticComponents) -> dict[str, torch.Tensor]:
+    if components.loader_iter is None:
+        components.loader_iter = iter(components.loader)
+
+    try:
+        return next(components.loader_iter)
+    except StopIteration:
+        components.loader_iter = iter(components.loader)
+        return next(components.loader_iter)
+
+
 def train_one_step(components: SyntheticComponents) -> dict[str, float]:
     components.encoder.train()
     components.head.train()
-    batch = next(iter(components.loader))
+    batch = _next_batch(components)
+    components.last_batch_target_position = batch["target_position"].detach().clone()
     components.optimizer.zero_grad()
     outputs = components.encoder(batch["obs"])
     predictions = components.head(outputs["memory"])
