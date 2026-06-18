@@ -7,6 +7,10 @@ import torch
 from torch.utils.data import Dataset
 
 
+_MAX_TORCH_SEED = 2**63 - 1
+_UINT64_MASK = 2**64 - 1
+
+
 @dataclass(frozen=True)
 class SyntheticVideoConfig:
     image_size: int
@@ -65,7 +69,7 @@ class SyntheticVideoDataset(Dataset):
         return self.config.dataset_size
 
     def __getitem__(self, index: int) -> dict[str, torch.Tensor]:
-        generator = torch.Generator().manual_seed(self.seed + index)
+        generator = torch.Generator().manual_seed(self._sample_seed(index))
         cfg = self.config
         background = self._make_background(generator)
         obs = background.unsqueeze(0).repeat(cfg.sequence_length, 1, 1, 1)
@@ -92,6 +96,16 @@ class SyntheticVideoDataset(Dataset):
             "background": background.float(),
         }
 
+    def _sample_seed(self, index: int) -> int:
+        value = (int(self.seed) * 0x9E3779B185EBCA87) & _UINT64_MASK
+        value ^= (int(index) * 0xC2B2AE3D27D4EB4F) & _UINT64_MASK
+        value ^= value >> 33
+        value = (value * 0xFF51AFD7ED558CCD) & _UINT64_MASK
+        value ^= value >> 33
+        value = (value * 0xC4CEB9FE1A85EC53) & _UINT64_MASK
+        value ^= value >> 33
+        return value % _MAX_TORCH_SEED
+
     def _make_background(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
         low_res = torch.rand(cfg.channels, 4, 4, generator=generator) * 0.35
@@ -103,6 +117,13 @@ class SyntheticVideoDataset(Dataset):
         ).squeeze(0)
 
     def _target_top_left_positions(self, generator: torch.Generator) -> torch.Tensor:
+        for _ in range(128):
+            positions = self._target_top_left_positions_once(generator)
+            if self._has_visible_motion(positions):
+                return positions
+        raise RuntimeError("failed to generate visible moving-object trajectory after 128 attempts")
+
+    def _target_top_left_positions_once(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
         limit = cfg.image_size - cfg.object_size
         pos = torch.rand(2, generator=generator) * limit
@@ -119,6 +140,9 @@ class SyntheticVideoDataset(Dataset):
                     velocity[axis] = -velocity[axis]
             pos = (pos + velocity).clamp(0, limit)
         return torch.stack(positions)
+
+    def _has_visible_motion(self, positions: torch.Tensor) -> bool:
+        return not torch.equal(positions[-1], positions[0]) and not torch.equal(positions[-1], positions[-2])
 
     def _target_center_positions(self, top_left_positions: torch.Tensor) -> torch.Tensor:
         offset = (self.config.object_size - 1) / 2

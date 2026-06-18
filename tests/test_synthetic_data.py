@@ -72,6 +72,37 @@ def test_dataset_is_deterministic_by_index_and_seed():
     assert torch.allclose(first["target_positions"], second["target_positions"])
 
 
+def test_adjacent_seed_and_index_pairs_do_not_collide():
+    first = make_dataset(seed=11)[3]
+    second = make_dataset(seed=12)[2]
+
+    assert not (
+        torch.allclose(first["obs"], second["obs"])
+        and torch.allclose(first["target_positions"], second["target_positions"])
+    )
+
+
+def test_dataset_sampling_does_not_advance_global_torch_rng_state():
+    torch.manual_seed(1234)
+    before = torch.random.get_rng_state()
+
+    _ = make_dataset(seed=17)[4]
+
+    after = torch.random.get_rng_state()
+    assert torch.equal(after, before)
+
+
+def test_synthetic_samples_have_visible_motion_labels_across_seed_sweep():
+    for seed in [*range(3), 130, 260]:
+        dataset = make_dataset(seed=seed)
+        for index in range(8):
+            sample = dataset[index]
+            target_positions = sample["target_positions"]
+
+            assert not torch.allclose(target_positions[-1], target_positions[0])
+            assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [
