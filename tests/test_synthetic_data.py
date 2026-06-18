@@ -135,7 +135,23 @@ def test_too_small_placement_range_rejected_at_construction():
         max_speed=1.0,
     )
 
-    with pytest.raises(ValueError, match="image_size - object_size must be at least 2"):
+    with pytest.raises(ValueError, match="image_size - object_size must be at least sequence_length - 1"):
+        SyntheticVideoDataset(config=config, seed=7)
+
+
+def test_motion_window_too_short_for_sequence_rejected_at_construction():
+    config = SyntheticVideoConfig(
+        image_size=3,
+        channels=1,
+        sequence_length=5,
+        dataset_size=1,
+        object_size=1,
+        clutter_count=0,
+        min_speed=1.0,
+        max_speed=1.0,
+    )
+
+    with pytest.raises(ValueError, match="image_size - object_size must be at least sequence_length - 1"):
         SyntheticVideoDataset(config=config, seed=7)
 
 
