@@ -1,3 +1,4 @@
+import pytest
 import torch
 
 from sdam.data.synthetic_video import SyntheticVideoConfig, SyntheticVideoDataset
@@ -37,9 +38,55 @@ def test_target_moves_and_mask_is_non_empty():
     assert sample["dynamic_mask"].sum() > 0
 
 
+def test_target_labels_match_dynamic_mask_centers_and_velocity():
+    sample = make_dataset()[0]
+
+    mask_centers = []
+    for frame_mask in sample["dynamic_mask"][:, 0]:
+        coords_yx = torch.nonzero(frame_mask, as_tuple=False)
+        assert coords_yx.numel() > 0
+        center = torch.stack(
+            [
+                coords_yx[:, 1].float().mean(),
+                coords_yx[:, 0].float().mean(),
+            ]
+        )
+        mask_centers.append(center)
+    mask_centers = torch.stack(mask_centers)
+
+    assert torch.allclose(sample["target_positions"], mask_centers)
+    assert torch.allclose(sample["target_position"], mask_centers[-1])
+    assert torch.allclose(sample["target_velocity"], mask_centers[-1] - mask_centers[-2])
+
+
 def test_dataset_is_deterministic_by_index_and_seed():
     first = make_dataset(seed=11)[3]
     second = make_dataset(seed=11)[3]
 
     assert torch.allclose(first["obs"], second["obs"])
     assert torch.allclose(first["target_positions"], second["target_positions"])
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"object_size": 33}, "object_size must be <= image_size"),
+        ({"clutter_count": -1}, "clutter_count must be >= 0"),
+        ({"min_speed": 3.0, "max_speed": 2.0}, "min_speed must be <= max_speed"),
+    ],
+)
+def test_invalid_synthetic_video_config_values_raise_clear_errors(overrides, message):
+    values = {
+        "image_size": 32,
+        "channels": 3,
+        "sequence_length": 5,
+        "dataset_size": 8,
+        "object_size": 4,
+        "clutter_count": 2,
+        "min_speed": 1.0,
+        "max_speed": 2.0,
+    }
+    values.update(overrides)
+
+    with pytest.raises(ValueError, match=message):
+        SyntheticVideoDataset(config=SyntheticVideoConfig(**values), seed=7)

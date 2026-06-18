@@ -20,8 +20,24 @@ class SyntheticVideoConfig:
 
 class SyntheticVideoDataset(Dataset):
     def __init__(self, config: SyntheticVideoConfig, seed: int = 0) -> None:
+        if config.image_size <= 0:
+            raise ValueError("image_size must be positive")
+        if config.channels <= 0:
+            raise ValueError("channels must be positive")
         if config.sequence_length < 2:
             raise ValueError("sequence_length must be at least 2")
+        if config.dataset_size <= 0:
+            raise ValueError("dataset_size must be positive")
+        if config.object_size <= 0:
+            raise ValueError("object_size must be positive")
+        if config.object_size > config.image_size:
+            raise ValueError("object_size must be <= image_size")
+        if config.clutter_count < 0:
+            raise ValueError("clutter_count must be >= 0")
+        if config.min_speed < 0:
+            raise ValueError("min_speed must be >= 0")
+        if config.min_speed > config.max_speed:
+            raise ValueError("min_speed must be <= max_speed")
         self.config = config
         self.seed = seed
 
@@ -35,21 +51,22 @@ class SyntheticVideoDataset(Dataset):
         obs = background.unsqueeze(0).repeat(cfg.sequence_length, 1, 1, 1)
         mask = torch.zeros(cfg.sequence_length, 1, cfg.image_size, cfg.image_size)
 
-        positions = self._target_positions(generator)
+        top_left_positions = self._target_top_left_positions(generator)
+        target_positions = self._target_center_positions(top_left_positions)
         color = torch.full((cfg.channels, 1, 1), 0.95)
         self._draw_static_clutter(obs, generator)
 
-        for t, pos in enumerate(positions):
+        for t, pos in enumerate(top_left_positions):
             x = int(pos[0].item())
             y = int(pos[1].item())
             obs[t, :, y : y + cfg.object_size, x : x + cfg.object_size] = color
             mask[t, :, y : y + cfg.object_size, x : x + cfg.object_size] = 1.0
 
-        velocity = positions[-1] - positions[-2]
+        velocity = target_positions[-1] - target_positions[-2]
         return {
             "obs": obs.clamp(0.0, 1.0).float(),
-            "target_positions": positions.float(),
-            "target_position": positions[-1].float(),
+            "target_positions": target_positions.float(),
+            "target_position": target_positions[-1].float(),
             "target_velocity": velocity.float(),
             "dynamic_mask": mask.float(),
             "background": background.float(),
@@ -65,9 +82,9 @@ class SyntheticVideoDataset(Dataset):
             align_corners=False,
         ).squeeze(0)
 
-    def _target_positions(self, generator: torch.Generator) -> torch.Tensor:
+    def _target_top_left_positions(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
-        limit = cfg.image_size - cfg.object_size - 1
+        limit = cfg.image_size - cfg.object_size
         pos = torch.rand(2, generator=generator) * limit
         direction = torch.randn(2, generator=generator)
         direction = direction / direction.norm().clamp_min(1e-6)
@@ -83,9 +100,13 @@ class SyntheticVideoDataset(Dataset):
             pos = (pos + velocity).clamp(0, limit)
         return torch.stack(positions)
 
+    def _target_center_positions(self, top_left_positions: torch.Tensor) -> torch.Tensor:
+        offset = (self.config.object_size - 1) / 2
+        return top_left_positions + offset
+
     def _draw_static_clutter(self, obs: torch.Tensor, generator: torch.Generator) -> None:
         cfg = self.config
-        limit = cfg.image_size - cfg.object_size - 1
+        limit = cfg.image_size - cfg.object_size
         for _ in range(cfg.clutter_count):
             x = int(torch.randint(0, limit + 1, (1,), generator=generator).item())
             y = int(torch.randint(0, limit + 1, (1,), generator=generator).item())
