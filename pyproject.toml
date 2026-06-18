@@ -17,6 +17,11 @@ dependencies = [
 dev = [
   "pytest>=8.0",
 ]
+atari = [
+  "stable-baselines3[extra]>=2.3",
+  "gymnasium[atari,accept-rom-license]>=0.29",
+  "ale-py>=0.8",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
