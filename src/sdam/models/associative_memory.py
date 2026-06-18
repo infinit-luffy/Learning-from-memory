@@ -38,6 +38,8 @@ class AssociativeMemory(nn.Module):
             raise ValueError("z_seq must have shape [B, K, dynamic_dim]")
         if z_seq.shape[-1] != self.dynamic_dim:
             raise ValueError(f"z_seq last dimension must be {self.dynamic_dim}")
+        if z_seq.shape[1] <= 0:
+            raise ValueError("z_seq sequence length must be positive")
         if b.ndim != 2 or b.shape[-1] != self.static_dim:
             raise ValueError(f"b must have shape [B, {self.static_dim}]")
         if b.shape[0] != z_seq.shape[0]:

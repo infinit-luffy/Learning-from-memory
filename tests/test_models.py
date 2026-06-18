@@ -61,3 +61,28 @@ def test_associative_memory_rejects_wrong_dynamic_dim():
 
     with pytest.raises(ValueError, match="z_seq last dimension must be 12"):
         memory(z_seq=torch.rand(2, 4, 11), b=torch.rand(2, 16))
+
+
+def test_associative_memory_rejects_empty_dynamic_sequence():
+    memory = AssociativeMemory(dynamic_dim=12, static_dim=16, assoc_dim=20)
+
+    with pytest.raises(ValueError, match="z_seq sequence length must be positive"):
+        memory(z_seq=torch.rand(2, 0, 12), b=torch.rand(2, 16))
+
+
+def test_associative_memory_rejects_missing_q_when_required():
+    memory = AssociativeMemory(dynamic_dim=12, static_dim=16, assoc_dim=20, q_dim=3)
+
+    with pytest.raises(ValueError, match="q must have shape"):
+        memory(z_seq=torch.rand(2, 4, 12), b=torch.rand(2, 16))
+
+
+def test_associative_memory_rejects_unexpected_actions_when_disabled():
+    memory = AssociativeMemory(dynamic_dim=12, static_dim=16, assoc_dim=20, action_dim=0)
+
+    with pytest.raises(ValueError, match="actions were provided but action_dim is 0"):
+        memory(
+            z_seq=torch.rand(2, 4, 12),
+            b=torch.rand(2, 16),
+            actions=torch.rand(2, 4, 2),
+        )
