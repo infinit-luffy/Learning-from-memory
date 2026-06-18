@@ -45,6 +45,48 @@ class SDAMConfig:
     training: TrainingConfig
 
 
+@dataclass(frozen=True)
+class AtariEnvConfig:
+    env_id: str
+    n_envs: int
+    n_stack: int
+    seed: int
+    terminal_on_life_loss: bool
+
+
+@dataclass(frozen=True)
+class AtariModelConfig:
+    static_dim: int
+    dynamic_dim: int
+    assoc_dim: int
+    hidden_channels: int
+    features_dim: int
+
+
+@dataclass(frozen=True)
+class AtariPPOConfig:
+    learning_rate: float
+    n_steps: int
+    batch_size: int
+    gamma: float
+    gae_lambda: float
+    clip_range: float
+
+
+@dataclass(frozen=True)
+class AtariTrainingConfig:
+    total_timesteps: int
+    save_path: str
+
+
+@dataclass(frozen=True)
+class AtariSDAMConfig:
+    env: AtariEnvConfig
+    model: AtariModelConfig
+    ppo: AtariPPOConfig
+    training: AtariTrainingConfig
+
+
 def load_config(path: str | Path) -> SDAMConfig:
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -68,6 +110,30 @@ def load_config(path: str | Path) -> SDAMConfig:
     return config
 
 
+def load_atari_config(path: str | Path) -> AtariSDAMConfig:
+    config_path = Path(path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
+
+    section_names = ("env", "model", "ppo", "training")
+    for section in section_names:
+        if section not in raw:
+            raise ValueError(f"missing required section: {section}")
+
+    for section in raw:
+        if section not in section_names:
+            raise ValueError(f"unknown section: {section}")
+
+    env = _load_section("env", raw["env"], AtariEnvConfig)
+    model = _load_section("model", raw["model"], AtariModelConfig)
+    ppo = _load_section("ppo", raw["ppo"], AtariPPOConfig)
+    training = _load_section("training", raw["training"], AtariTrainingConfig)
+    config = AtariSDAMConfig(env=env, model=model, ppo=ppo, training=training)
+    _validate_atari_config(config)
+    return config
+
+
 def _load_section(section: str, payload: object, config_type):
     if not isinstance(payload, dict):
         raise ValueError(f"section {section} must be a mapping")
@@ -87,6 +153,10 @@ def _load_section(section: str, payload: object, config_type):
         value = payload[field.name]
         expected_type = type_hints[field.name]
         field_path = f"{section}.{field.name}"
+        if expected_type is str and (type(value) is not str):
+            raise ValueError(f"{field_path} must be a string")
+        if expected_type is bool and (type(value) is not bool):
+            raise ValueError(f"{field_path} must be a bool")
         if expected_type is int and (type(value) is not int):
             raise ValueError(f"{field_path} must be an int")
         if expected_type is float and (
@@ -134,3 +204,40 @@ def _validate_config(config: SDAMConfig) -> None:
         raise ValueError("training.train_steps must be positive")
     if config.training.velocity_loss_weight < 0:
         raise ValueError("training.velocity_loss_weight must be non-negative")
+
+
+def _validate_atari_config(config: AtariSDAMConfig) -> None:
+    if not config.env.env_id.strip():
+        raise ValueError("env.env_id must be non-empty")
+    if config.env.n_envs <= 0:
+        raise ValueError("env.n_envs must be positive")
+    if config.env.n_stack < 2:
+        raise ValueError("env.n_stack must be at least 2")
+    if config.env.seed < 0:
+        raise ValueError("env.seed must be non-negative")
+    if config.model.static_dim <= 0:
+        raise ValueError("model.static_dim must be positive")
+    if config.model.dynamic_dim <= 0:
+        raise ValueError("model.dynamic_dim must be positive")
+    if config.model.assoc_dim <= 0:
+        raise ValueError("model.assoc_dim must be positive")
+    if config.model.hidden_channels <= 0:
+        raise ValueError("model.hidden_channels must be positive")
+    if config.model.features_dim <= 0:
+        raise ValueError("model.features_dim must be positive")
+    if config.ppo.learning_rate <= 0:
+        raise ValueError("ppo.learning_rate must be positive")
+    if config.ppo.n_steps <= 0:
+        raise ValueError("ppo.n_steps must be positive")
+    if config.ppo.batch_size <= 0:
+        raise ValueError("ppo.batch_size must be positive")
+    if not (0 < config.ppo.gamma <= 1):
+        raise ValueError("ppo.gamma must satisfy 0 < value <= 1")
+    if not (0 < config.ppo.gae_lambda <= 1):
+        raise ValueError("ppo.gae_lambda must satisfy 0 < value <= 1")
+    if config.ppo.clip_range <= 0:
+        raise ValueError("ppo.clip_range must be positive")
+    if config.training.total_timesteps <= 0:
+        raise ValueError("training.total_timesteps must be positive")
+    if not config.training.save_path.strip():
+        raise ValueError("training.save_path must be non-empty")
