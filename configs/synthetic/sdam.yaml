@@ -1,0 +1,21 @@
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 64
+  object_size: 4
+  clutter_count: 2
+  min_speed: 1.0
+  max_speed: 3.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  train_steps: 3
+  velocity_loss_weight: 0.25
