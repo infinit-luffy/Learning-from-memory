@@ -1,7 +1,7 @@
 import pytest
 import torch
 
-from sdam.models import AssociativeMemory, DynamicEncoder, StaticEncoder
+from sdam.models import AssociativeMemory, DynamicEncoder, PositionVelocityHead, SDAMEncoder, StaticEncoder
 
 
 def make_obs(batch: int = 2, time: int = 5) -> torch.Tensor:
@@ -86,3 +86,49 @@ def test_associative_memory_rejects_unexpected_actions_when_disabled():
             b=torch.rand(2, 16),
             actions=torch.rand(2, 4, 2),
         )
+
+
+def test_sdam_encoder_returns_structured_memory_dict():
+    encoder = SDAMEncoder(
+        in_channels=3,
+        sequence_length=5,
+        hidden_channels=8,
+        static_dim=16,
+        dynamic_dim=12,
+        assoc_dim=20,
+    )
+
+    outputs = encoder(make_obs())
+
+    assert set(outputs.keys()) == {"b", "z_seq", "c", "memory", "aux"}
+    assert outputs["b"].shape == (2, 16)
+    assert outputs["z_seq"].shape == (2, 4, 12)
+    assert outputs["c"].shape == (2, 20)
+    assert outputs["memory"].shape == (2, encoder.memory_dim)
+
+
+def test_sdam_encoder_accepts_time_aligned_q_and_actions():
+    encoder = SDAMEncoder(
+        in_channels=3,
+        sequence_length=5,
+        hidden_channels=8,
+        static_dim=16,
+        dynamic_dim=12,
+        assoc_dim=20,
+        q_dim=3,
+        action_dim=2,
+    )
+
+    outputs = encoder(make_obs(), q=torch.rand(2, 5, 3), actions=torch.rand(2, 4, 2))
+
+    assert outputs["memory"].shape == (2, encoder.memory_dim)
+
+
+def test_position_velocity_head_predicts_four_values():
+    encoder = SDAMEncoder(in_channels=3, sequence_length=5, hidden_channels=8, static_dim=16, dynamic_dim=12, assoc_dim=20)
+    head = PositionVelocityHead(memory_dim=encoder.memory_dim, hidden_dim=32)
+
+    prediction = head(encoder(make_obs())["memory"])
+
+    assert prediction["position"].shape == (2, 2)
+    assert prediction["velocity"].shape == (2, 2)
