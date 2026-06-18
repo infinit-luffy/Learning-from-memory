@@ -1,0 +1,26 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sdam"
+version = "0.1.0"
+description = "Static-Dynamic Associative Memory for visual decision representation learning."
+readme = "docs/superpowers/specs/2026-06-18-sdam-experimental-framework-design.md"
+requires-python = ">=3.11"
+dependencies = [
+  "torch>=2.2",
+  "PyYAML>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
