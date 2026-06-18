@@ -103,7 +103,7 @@ def test_synthetic_samples_have_visible_motion_labels_across_seed_sweep():
             assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
 
 
-def test_tiny_positive_speed_still_produces_visible_motion():
+def test_tiny_positive_speed_without_integer_visible_step_is_rejected():
     config = SyntheticVideoConfig(
         image_size=32,
         channels=3,
@@ -114,13 +114,43 @@ def test_tiny_positive_speed_still_produces_visible_motion():
         min_speed=1e-9,
         max_speed=1e-9,
     )
+
+    with pytest.raises(ValueError, match="speed range must include an integer visible step"):
+        SyntheticVideoDataset(config=config, seed=7)
+
+
+def test_accepted_speed_range_is_honored_by_target_velocity():
+    config = SyntheticVideoConfig(
+        image_size=32,
+        channels=3,
+        sequence_length=5,
+        dataset_size=1,
+        object_size=4,
+        clutter_count=2,
+        min_speed=2.0,
+        max_speed=2.0,
+    )
     dataset = SyntheticVideoDataset(config=config, seed=7)
 
     sample = dataset[0]
 
-    target_positions = sample["target_positions"]
-    assert not torch.allclose(target_positions[-1], target_positions[0])
-    assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
+    assert torch.linalg.vector_norm(sample["target_velocity"]) == torch.tensor(2.0)
+
+
+def test_visible_speed_step_must_fit_within_placement_range():
+    config = SyntheticVideoConfig(
+        image_size=6,
+        channels=1,
+        sequence_length=5,
+        dataset_size=1,
+        object_size=2,
+        clutter_count=0,
+        min_speed=5.0,
+        max_speed=5.0,
+    )
+
+    with pytest.raises(ValueError, match="visible speed step must fit within placement range"):
+        SyntheticVideoDataset(config=config, seed=7)
 
 
 def test_too_small_placement_range_rejected_at_construction():

@@ -65,6 +65,12 @@ class SyntheticVideoDataset(Dataset):
             raise ValueError("clutter_count must be >= 0")
         if config.min_speed <= 0 or config.min_speed > config.max_speed:
             raise ValueError("speed range must satisfy 0 < min_speed <= max_speed")
+        self._visible_step = self._validate_visible_integer_step(
+            min_speed=config.min_speed,
+            max_speed=config.max_speed,
+            placement_limit=placement_limit,
+            sequence_length=config.sequence_length,
+        )
         self.config = config
         self.seed = seed
 
@@ -119,41 +125,38 @@ class SyntheticVideoDataset(Dataset):
             align_corners=False,
         ).squeeze(0)
 
-    def _target_top_left_positions(self, generator: torch.Generator) -> torch.Tensor:
-        for _ in range(128):
-            positions = self._target_top_left_positions_once(generator)
-            if self._has_visible_motion(positions):
-                return positions
-        raise RuntimeError("failed to generate visible moving-object trajectory after 128 attempts")
+    def _validate_visible_integer_step(
+        self,
+        *,
+        min_speed: float,
+        max_speed: float,
+        placement_limit: int,
+        sequence_length: int,
+    ) -> int:
+        step = math.ceil(min_speed)
+        if step < 1 or step > max_speed:
+            raise ValueError("speed range must include an integer visible step")
+        if step > placement_limit or step * (sequence_length - 1) > placement_limit:
+            raise ValueError("visible speed step must fit within placement range")
+        return step
 
-    def _target_top_left_positions_once(self, generator: torch.Generator) -> torch.Tensor:
+    def _target_top_left_positions(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
         limit = cfg.image_size - cfg.object_size
-        speed = cfg.min_speed + torch.rand(1, generator=generator).item() * (cfg.max_speed - cfg.min_speed)
-        step = max(1, min(limit, int(round(speed))))
+        step = self._visible_step
+        axis = int(torch.randint(0, 2, (1,), generator=generator).item())
+        sign = 1 if int(torch.randint(0, 2, (1,), generator=generator).item()) == 0 else -1
 
-        pos = torch.randint(0, limit + 1, (2,), generator=generator, dtype=torch.long)
-        velocity = None
-        for _ in range(128):
-            candidate = torch.randint(-step, step + 1, (2,), generator=generator, dtype=torch.long)
-            if torch.any(candidate != 0):
-                velocity = candidate
-                break
-        if velocity is None:
-            velocity = torch.tensor([step, 0], dtype=torch.long)
-
+        pos = torch.zeros(2, dtype=torch.long)
+        moving_start = 0 if sign > 0 else limit
+        static_axis = 1 - axis
+        pos[axis] = moving_start
+        pos[static_axis] = torch.randint(0, limit + 1, (1,), generator=generator, dtype=torch.long)
         positions = []
-        for _ in range(cfg.sequence_length):
+        for t in range(cfg.sequence_length):
+            pos[axis] = moving_start + sign * step * t
             positions.append(pos.clone())
-            next_pos = pos + velocity
-            for axis in range(2):
-                if next_pos[axis] < 0 or next_pos[axis] > limit:
-                    velocity[axis] = -velocity[axis]
-            pos = (pos + velocity).clamp(0, limit)
         return torch.stack(positions)
-
-    def _has_visible_motion(self, positions: torch.Tensor) -> bool:
-        return not torch.equal(positions[-1], positions[0]) and not torch.equal(positions[-1], positions[-2])
 
     def _target_center_positions(self, top_left_positions: torch.Tensor) -> torch.Tensor:
         offset = (self.config.object_size - 1) / 2
