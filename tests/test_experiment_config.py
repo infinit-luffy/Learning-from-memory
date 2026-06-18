@@ -44,6 +44,40 @@ def test_missing_required_config_section_raises(tmp_path):
         load_config(path)
 
 
+def test_unknown_root_section_raises(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: 1.0
+  max_speed: 2.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  train_steps: 2
+  velocity_loss_weight: 0.25
+trainng: {}
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="unknown section: trainng"):
+        load_config(path)
+
+
 def test_section_must_be_mapping(tmp_path):
     path = tmp_path / "bad.yaml"
     path.write_text(
@@ -234,6 +268,39 @@ training:
         load_config(path)
 
 
+def test_data_min_speed_must_be_finite(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: .inf
+  max_speed: 2.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  train_steps: 2
+  velocity_loss_weight: 0.25
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"data\.min_speed must be finite"):
+        load_config(path)
+
+
 def test_sequence_length_must_be_an_int(tmp_path):
     path = tmp_path / "bad.yaml"
     path.write_text(
@@ -297,4 +364,37 @@ training:
     )
 
     with pytest.raises(ValueError, match=r"training\.learning_rate must be a number"):
+        load_config(path)
+
+
+def test_learning_rate_must_be_finite(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: 1.0
+  max_speed: 2.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: .nan
+  train_steps: 2
+  velocity_loss_weight: 0.25
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"training\.learning_rate must be finite"):
         load_config(path)

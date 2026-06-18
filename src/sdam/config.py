@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import get_type_hints
@@ -50,9 +51,14 @@ def load_config(path: str | Path) -> SDAMConfig:
     if not isinstance(raw, dict):
         raise ValueError("config root must be a mapping")
 
-    for section in ("data", "model", "training"):
+    section_names = ("data", "model", "training")
+    for section in section_names:
         if section not in raw:
             raise ValueError(f"missing required section: {section}")
+
+    for section in raw:
+        if section not in section_names:
+            raise ValueError(f"unknown section: {section}")
 
     data = _load_section("data", raw["data"], DataConfig)
     model = _load_section("model", raw["model"], ModelConfig)
@@ -87,6 +93,8 @@ def _load_section(section: str, payload: object, config_type):
             type(value) not in (int, float)
         ):
             raise ValueError(f"{field_path} must be a number")
+        if expected_type in (int, float) and not math.isfinite(value):
+            raise ValueError(f"{field_path} must be finite")
 
     return config_type(**payload)
 
