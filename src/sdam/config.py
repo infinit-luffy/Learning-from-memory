@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, fields
 from pathlib import Path
+from typing import get_type_hints
 
 import yaml
 
@@ -65,9 +66,27 @@ def _load_section(section: str, payload: object, config_type):
     if not isinstance(payload, dict):
         raise ValueError(f"section {section} must be a mapping")
 
-    for field in fields(config_type):
+    config_fields = fields(config_type)
+    field_names = {field.name for field in config_fields}
+    for key in payload:
+        if key not in field_names:
+            raise ValueError(f"unknown key: {section}.{key}")
+
+    for field in config_fields:
         if field.name not in payload:
             raise ValueError(f"missing required key: {section}.{field.name}")
+
+    type_hints = get_type_hints(config_type)
+    for field in config_fields:
+        value = payload[field.name]
+        expected_type = type_hints[field.name]
+        field_path = f"{section}.{field.name}"
+        if expected_type is int and (type(value) is not int):
+            raise ValueError(f"{field_path} must be an int")
+        if expected_type is float and (
+            type(value) not in (int, float)
+        ):
+            raise ValueError(f"{field_path} must be a number")
 
     return config_type(**payload)
 

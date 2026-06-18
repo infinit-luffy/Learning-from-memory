@@ -198,3 +198,103 @@ training:
 
     with pytest.raises(ValueError, match="data.clutter_count must be non-negative"):
         load_config(path)
+
+
+def test_unknown_data_key_raises_with_context(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: 1.0
+  max_speed: 2.0
+  typo: 1
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  train_steps: 2
+  velocity_loss_weight: 0.25
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"unknown key: data\.typo"):
+        load_config(path)
+
+
+def test_sequence_length_must_be_an_int(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: nope
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: 1.0
+  max_speed: 2.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: 0.001
+  train_steps: 2
+  velocity_loss_weight: 0.25
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"data\.sequence_length must be an int"):
+        load_config(path)
+
+
+def test_learning_rate_must_be_a_number(tmp_path):
+    path = tmp_path / "bad.yaml"
+    path.write_text(
+        """
+data:
+  image_size: 32
+  channels: 3
+  sequence_length: 5
+  dataset_size: 8
+  object_size: 4
+  clutter_count: 1
+  min_speed: 1.0
+  max_speed: 2.0
+model:
+  static_dim: 16
+  dynamic_dim: 12
+  assoc_dim: 20
+  hidden_channels: 8
+  q_dim: 0
+  action_dim: 0
+training:
+  batch_size: 4
+  learning_rate: nope
+  train_steps: 2
+  velocity_loss_weight: 0.25
+""",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"training\.learning_rate must be a number"):
+        load_config(path)
