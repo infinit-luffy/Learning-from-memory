@@ -103,6 +103,26 @@ def test_synthetic_samples_have_visible_motion_labels_across_seed_sweep():
             assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
 
 
+def test_tiny_positive_speed_still_produces_visible_motion():
+    config = SyntheticVideoConfig(
+        image_size=32,
+        channels=3,
+        sequence_length=5,
+        dataset_size=1,
+        object_size=4,
+        clutter_count=2,
+        min_speed=1e-9,
+        max_speed=1e-9,
+    )
+    dataset = SyntheticVideoDataset(config=config, seed=7)
+
+    sample = dataset[0]
+
+    target_positions = sample["target_positions"]
+    assert not torch.allclose(target_positions[-1], target_positions[0])
+    assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

@@ -126,14 +126,22 @@ class SyntheticVideoDataset(Dataset):
     def _target_top_left_positions_once(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
         limit = cfg.image_size - cfg.object_size
-        pos = torch.rand(2, generator=generator) * limit
-        direction = torch.randn(2, generator=generator)
-        direction = direction / direction.norm().clamp_min(1e-6)
         speed = cfg.min_speed + torch.rand(1, generator=generator).item() * (cfg.max_speed - cfg.min_speed)
-        velocity = direction * speed
+        step = max(1, min(limit, int(round(speed))))
+
+        pos = torch.randint(0, limit + 1, (2,), generator=generator, dtype=torch.long)
+        velocity = None
+        for _ in range(128):
+            candidate = torch.randint(-step, step + 1, (2,), generator=generator, dtype=torch.long)
+            if torch.any(candidate != 0):
+                velocity = candidate
+                break
+        if velocity is None:
+            velocity = torch.tensor([step, 0], dtype=torch.long)
+
         positions = []
         for _ in range(cfg.sequence_length):
-            positions.append(pos.round().clamp(0, limit))
+            positions.append(pos.clone())
             next_pos = pos + velocity
             for axis in range(2):
                 if next_pos[axis] < 0 or next_pos[axis] > limit:
