@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -20,6 +21,25 @@ class SyntheticVideoConfig:
 
 class SyntheticVideoDataset(Dataset):
     def __init__(self, config: SyntheticVideoConfig, seed: int = 0) -> None:
+        for field_name in (
+            "image_size",
+            "channels",
+            "sequence_length",
+            "dataset_size",
+            "object_size",
+            "clutter_count",
+        ):
+            value = getattr(config, field_name)
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(f"{field_name} must be an int")
+
+        for field_name in ("min_speed", "max_speed"):
+            value = getattr(config, field_name)
+            if isinstance(value, bool) or not isinstance(value, int | float):
+                raise ValueError(f"{field_name} must be a number")
+            if not math.isfinite(value):
+                raise ValueError(f"{field_name} must be finite")
+
         if config.image_size <= 0:
             raise ValueError("image_size must be positive")
         if config.channels <= 0:
@@ -30,14 +50,14 @@ class SyntheticVideoDataset(Dataset):
             raise ValueError("dataset_size must be positive")
         if config.object_size <= 0:
             raise ValueError("object_size must be positive")
+        if config.object_size == config.image_size:
+            raise ValueError("object_size must be smaller than image_size")
         if config.object_size > config.image_size:
             raise ValueError("object_size must be <= image_size")
         if config.clutter_count < 0:
             raise ValueError("clutter_count must be >= 0")
-        if config.min_speed < 0:
-            raise ValueError("min_speed must be >= 0")
-        if config.min_speed > config.max_speed:
-            raise ValueError("min_speed must be <= max_speed")
+        if config.min_speed <= 0 or config.min_speed > config.max_speed:
+            raise ValueError("speed range must satisfy 0 < min_speed <= max_speed")
         self.config = config
         self.seed = seed
 

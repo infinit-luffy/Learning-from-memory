@@ -27,6 +27,11 @@ def test_synthetic_video_sample_shapes_and_dtype():
     assert sample["background"].shape == (3, 32, 32)
     assert sample["target_position"].shape == (2,)
     assert sample["target_velocity"].shape == (2,)
+    assert sample["target_positions"].dtype == torch.float32
+    assert sample["target_position"].dtype == torch.float32
+    assert sample["target_velocity"].dtype == torch.float32
+    assert sample["dynamic_mask"].dtype == torch.float32
+    assert sample["background"].dtype == torch.float32
 
 
 def test_target_moves_and_mask_is_non_empty():
@@ -71,8 +76,12 @@ def test_dataset_is_deterministic_by_index_and_seed():
     ("overrides", "message"),
     [
         ({"object_size": 33}, "object_size must be <= image_size"),
+        ({"object_size": 32}, "object_size must be smaller than image_size"),
         ({"clutter_count": -1}, "clutter_count must be >= 0"),
-        ({"min_speed": 3.0, "max_speed": 2.0}, "min_speed must be <= max_speed"),
+        ({"min_speed": 3.0, "max_speed": 2.0}, "speed range must satisfy 0 < min_speed <= max_speed"),
+        ({"min_speed": 0.0, "max_speed": 0.0}, "speed range must satisfy 0 < min_speed <= max_speed"),
+        ({"image_size": 32.0}, "image_size must be an int"),
+        ({"min_speed": float("nan")}, "min_speed must be finite"),
     ],
 )
 def test_invalid_synthetic_video_config_values_raise_clear_errors(overrides, message):
