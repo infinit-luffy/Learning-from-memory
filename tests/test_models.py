@@ -105,6 +105,12 @@ def test_sdam_encoder_returns_structured_memory_dict():
     assert outputs["z_seq"].shape == (2, 4, 12)
     assert outputs["c"].shape == (2, 20)
     assert outputs["memory"].shape == (2, encoder.memory_dim)
+    assert encoder.memory_dim == 16 + (4 * 12) + 20
+    expected_memory = torch.cat(
+        [outputs["b"], outputs["z_seq"].flatten(start_dim=1), outputs["c"]],
+        dim=-1,
+    )
+    assert torch.allclose(outputs["memory"], expected_memory)
 
 
 def test_sdam_encoder_accepts_time_aligned_q_and_actions():
@@ -119,9 +125,16 @@ def test_sdam_encoder_accepts_time_aligned_q_and_actions():
         action_dim=2,
     )
 
-    outputs = encoder(make_obs(), q=torch.rand(2, 5, 3), actions=torch.rand(2, 4, 2))
+    q = torch.rand(2, 5, 3)
+    outputs = encoder(make_obs(), q=q, actions=torch.rand(2, 4, 2))
 
     assert outputs["memory"].shape == (2, encoder.memory_dim)
+    assert encoder.memory_dim == 16 + (4 * 12) + 20 + 3
+    expected_memory = torch.cat(
+        [outputs["b"], outputs["z_seq"].flatten(start_dim=1), outputs["c"], q[:, -1]],
+        dim=-1,
+    )
+    assert torch.allclose(outputs["memory"], expected_memory)
 
 
 def test_position_velocity_head_predicts_four_values():
@@ -132,3 +145,10 @@ def test_position_velocity_head_predicts_four_values():
 
     assert prediction["position"].shape == (2, 2)
     assert prediction["velocity"].shape == (2, 2)
+
+
+def test_position_velocity_head_rejects_wrong_memory_width():
+    head = PositionVelocityHead(memory_dim=10, hidden_dim=32)
+
+    with pytest.raises(ValueError, match="memory must have shape"):
+        head(torch.rand(2, 9))
