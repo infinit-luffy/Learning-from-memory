@@ -123,6 +123,22 @@ def test_tiny_positive_speed_still_produces_visible_motion():
     assert torch.linalg.vector_norm(sample["target_velocity"]) > 0
 
 
+def test_too_small_placement_range_rejected_at_construction():
+    config = SyntheticVideoConfig(
+        image_size=2,
+        channels=1,
+        sequence_length=3,
+        dataset_size=1,
+        object_size=1,
+        clutter_count=0,
+        min_speed=1.0,
+        max_speed=1.0,
+    )
+
+    with pytest.raises(ValueError, match="image_size - object_size must be at least 2"):
+        SyntheticVideoDataset(config=config, seed=7)
+
+
 @pytest.mark.parametrize(
     ("overrides", "message"),
     [

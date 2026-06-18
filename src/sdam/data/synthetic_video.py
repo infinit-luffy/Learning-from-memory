@@ -58,6 +58,9 @@ class SyntheticVideoDataset(Dataset):
             raise ValueError("object_size must be smaller than image_size")
         if config.object_size > config.image_size:
             raise ValueError("object_size must be <= image_size")
+        placement_limit = config.image_size - config.object_size
+        if placement_limit < 2:
+            raise ValueError("image_size - object_size must be at least 2")
         if config.clutter_count < 0:
             raise ValueError("clutter_count must be >= 0")
         if config.min_speed <= 0 or config.min_speed > config.max_speed:
