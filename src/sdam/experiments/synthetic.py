@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 from typing import Iterator
 
@@ -91,8 +92,10 @@ def evaluate_one_batch(components: SyntheticComponents) -> dict[str, float]:
     components.encoder.eval()
     components.head.eval()
     batch = next(iter(components.loader))
+    start_time = time.perf_counter()
     outputs = components.encoder(batch["obs"])
     predictions = components.head(outputs["memory"])
+    elapsed_ms = (time.perf_counter() - start_time) * 1000.0
     _, metrics = position_velocity_loss(
         predictions,
         batch,
@@ -102,4 +105,5 @@ def evaluate_one_batch(components: SyntheticComponents) -> dict[str, float]:
         "position_mse": metrics["position_loss"],
         "velocity_mse": metrics["velocity_loss"],
         "memory_dim": float(components.encoder.memory_dim),
+        "forward_latency_ms": elapsed_ms,
     }

@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 import torch
 
+import sdam.experiments.synthetic as synthetic_experiment
 from sdam.config import load_config
 from sdam.experiments.synthetic import build_synthetic_components, evaluate_one_batch, train_one_step
 from sdam.losses.flow_matching import latent_flow_matching_loss
@@ -52,6 +53,26 @@ def test_evaluate_one_batch_reports_memory_dim_and_losses():
     assert metrics["memory_dim"] > 0
     assert metrics["position_mse"] >= 0.0
     assert metrics["velocity_mse"] >= 0.0
+    assert metrics["forward_latency_ms"] >= 0.0
+
+
+def test_evaluate_one_batch_forward_latency_excludes_loss_time(monkeypatch):
+    config = load_config(Path("configs/synthetic/sdam.yaml"))
+    components = build_synthetic_components(config)
+    original_loss = synthetic_experiment.position_velocity_loss
+    ticks = iter([10.0, 10.25, 99.0])
+
+    monkeypatch.setattr(synthetic_experiment.time, "perf_counter", lambda: next(ticks))
+
+    def loss_with_observable_timer(*args, **kwargs):
+        synthetic_experiment.time.perf_counter()
+        return original_loss(*args, **kwargs)
+
+    monkeypatch.setattr(synthetic_experiment, "position_velocity_loss", loss_with_observable_timer)
+
+    metrics = evaluate_one_batch(components)
+
+    assert metrics["forward_latency_ms"] == pytest.approx(250.0)
 
 
 def test_evaluate_one_batch_uses_eval_mode_without_grads():
@@ -106,6 +127,7 @@ def test_eval_script_runs_on_default_config():
 
     assert "position_mse" in result.stdout
     assert "memory_dim" in result.stdout
+    assert "forward_latency_ms" in result.stdout
 
 
 def test_train_script_runs_for_one_step():

@@ -64,6 +64,23 @@ def test_target_labels_match_dynamic_mask_centers_and_velocity():
     assert torch.allclose(sample["target_velocity"], mask_centers[-1] - mask_centers[-2])
 
 
+def test_moving_target_and_static_clutter_share_appearance():
+    sample = make_dataset()[0]
+    obs = sample["obs"]
+    dynamic_mask = sample["dynamic_mask"][:, 0].bool()
+
+    target_pixel_yx = torch.nonzero(dynamic_mask[0], as_tuple=False)[0]
+    target_value = obs[0, :, target_pixel_yx[0], target_pixel_yx[1]]
+
+    never_target = ~dynamic_mask.any(dim=0)
+    static_bright = (obs[:, 0] > 0.7).all(dim=0) & never_target
+    static_pixel_yx = torch.nonzero(static_bright, as_tuple=False)
+
+    assert static_pixel_yx.numel() > 0
+    clutter_value = obs[0, :, static_pixel_yx[0, 0], static_pixel_yx[0, 1]]
+    assert torch.allclose(clutter_value, target_value)
+
+
 def test_dataset_is_deterministic_by_index_and_seed():
     first = make_dataset(seed=11)[3]
     second = make_dataset(seed=11)[3]
@@ -135,6 +152,30 @@ def test_accepted_speed_range_is_honored_by_target_velocity():
     sample = dataset[0]
 
     assert torch.linalg.vector_norm(sample["target_velocity"]) == torch.tensor(2.0)
+
+
+def test_speed_range_samples_multiple_integer_visible_steps():
+    config = SyntheticVideoConfig(
+        image_size=32,
+        channels=3,
+        sequence_length=5,
+        dataset_size=16,
+        object_size=4,
+        clutter_count=2,
+        min_speed=1.0,
+        max_speed=3.0,
+    )
+
+    speeds = set()
+    for seed in range(6):
+        dataset = SyntheticVideoDataset(config=config, seed=seed)
+        for index in range(len(dataset)):
+            speed = torch.linalg.vector_norm(dataset[index]["target_velocity"])
+            speeds.add(round(float(speed.item()), 4))
+
+    assert len(speeds) >= 2
+    assert min(speeds) >= 1.0
+    assert max(speeds) <= 3.0
 
 
 def test_visible_speed_step_must_fit_within_placement_range():

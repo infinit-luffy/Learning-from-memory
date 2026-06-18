@@ -9,6 +9,7 @@ from torch.utils.data import Dataset
 
 _MAX_TORCH_SEED = 2**63 - 1
 _UINT64_MASK = 2**64 - 1
+_OBJECT_VALUE = 0.95
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ class SyntheticVideoDataset(Dataset):
             raise ValueError("clutter_count must be >= 0")
         if config.min_speed <= 0 or config.min_speed > config.max_speed:
             raise ValueError("speed range must satisfy 0 < min_speed <= max_speed")
-        self._visible_step = self._validate_visible_integer_step(
+        self._min_visible_step, self._max_visible_step = self._validate_visible_integer_step_bounds(
             min_speed=config.min_speed,
             max_speed=config.max_speed,
             placement_limit=placement_limit,
@@ -86,7 +87,7 @@ class SyntheticVideoDataset(Dataset):
 
         top_left_positions = self._target_top_left_positions(generator)
         target_positions = self._target_center_positions(top_left_positions)
-        color = torch.full((cfg.channels, 1, 1), 0.95)
+        color = torch.full((cfg.channels, 1, 1), _OBJECT_VALUE)
         self._draw_static_clutter(obs, generator)
 
         for t, pos in enumerate(top_left_positions):
@@ -125,25 +126,34 @@ class SyntheticVideoDataset(Dataset):
             align_corners=False,
         ).squeeze(0)
 
-    def _validate_visible_integer_step(
+    def _validate_visible_integer_step_bounds(
         self,
         *,
         min_speed: float,
         max_speed: float,
         placement_limit: int,
         sequence_length: int,
-    ) -> int:
-        step = math.ceil(min_speed)
-        if step < 1 or step > max_speed:
+    ) -> tuple[int, int]:
+        min_step = math.ceil(min_speed)
+        max_step = math.floor(max_speed)
+        if min_step < 1 or min_step > max_step:
             raise ValueError("speed range must include an integer visible step")
-        if step > placement_limit or step * (sequence_length - 1) > placement_limit:
+        max_fitting_step = min(max_step, placement_limit // (sequence_length - 1))
+        if min_step > max_fitting_step:
             raise ValueError("visible speed step must fit within placement range")
-        return step
+        return min_step, max_fitting_step
 
     def _target_top_left_positions(self, generator: torch.Generator) -> torch.Tensor:
         cfg = self.config
         limit = cfg.image_size - cfg.object_size
-        step = self._visible_step
+        step = int(
+            torch.randint(
+                self._min_visible_step,
+                self._max_visible_step + 1,
+                (1,),
+                generator=generator,
+            ).item()
+        )
         axis = int(torch.randint(0, 2, (1,), generator=generator).item())
         sign = 1 if int(torch.randint(0, 2, (1,), generator=generator).item()) == 0 else -1
 
@@ -168,5 +178,5 @@ class SyntheticVideoDataset(Dataset):
         for _ in range(cfg.clutter_count):
             x = int(torch.randint(0, limit + 1, (1,), generator=generator).item())
             y = int(torch.randint(0, limit + 1, (1,), generator=generator).item())
-            color = torch.full((cfg.channels, 1, 1), 0.8)
+            color = torch.full((cfg.channels, 1, 1), _OBJECT_VALUE)
             obs[:, :, y : y + cfg.object_size, x : x + cfg.object_size] = color
