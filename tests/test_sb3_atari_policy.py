@@ -1,5 +1,4 @@
 import builtins
-import importlib
 import sys
 import types
 
@@ -25,7 +24,11 @@ def fake_sb3(monkeypatch):
         def __init__(self, observation_space, features_dim):
             super().__init__()
             self.observation_space = observation_space
-            self.features_dim = features_dim
+            self._features_dim = features_dim
+
+        @property
+        def features_dim(self):
+            return self._features_dim
 
     torch_layers.BaseFeaturesExtractor = BaseFeaturesExtractor
     common.torch_layers = torch_layers
@@ -37,7 +40,36 @@ def fake_sb3(monkeypatch):
 
     import sdam.policies.sb3_atari as sb3_atari
 
-    return importlib.reload(sb3_atari)
+    return sb3_atari
+
+
+def remove_sb3_modules(monkeypatch):
+    monkeypatch.delitem(sys.modules, "stable_baselines3", raising=False)
+    monkeypatch.delitem(sys.modules, "stable_baselines3.common", raising=False)
+    monkeypatch.delitem(sys.modules, "stable_baselines3.common.torch_layers", raising=False)
+
+
+def require_missing_sb3(monkeypatch, sb3_atari):
+    remove_sb3_modules(monkeypatch)
+    real_import = builtins.__import__
+
+    def import_without_sb3(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "stable_baselines3" or name.startswith("stable_baselines3."):
+            raise ModuleNotFoundError("No module named 'stable_baselines3'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.setattr(builtins, "__import__", import_without_sb3)
+
+    with pytest.raises(ImportError, match="Stable-Baselines3 is required"):
+        sb3_atari.SDAMAtariFeaturesExtractor(
+            FakeBox((4, 84, 84)),
+            static_dim=8,
+            dynamic_dim=8,
+            assoc_dim=16,
+            hidden_channels=4,
+            features_dim=32,
+            sequence_length=4,
+        )
 
 
 def test_uint_like_observations_are_scaled_and_channelled():
@@ -113,29 +145,20 @@ def test_sdam_atari_features_extractor_requires_matching_observation_space(fake_
 
 
 def test_sdam_atari_policy_imports_without_sb3(monkeypatch):
-    monkeypatch.delitem(sys.modules, "stable_baselines3", raising=False)
-    monkeypatch.delitem(sys.modules, "stable_baselines3.common", raising=False)
-    monkeypatch.delitem(sys.modules, "stable_baselines3.common.torch_layers", raising=False)
-    real_import = builtins.__import__
-
-    def import_without_sb3(name, globals=None, locals=None, fromlist=(), level=0):
-        if name == "stable_baselines3" or name.startswith("stable_baselines3."):
-            raise ModuleNotFoundError("No module named 'stable_baselines3'")
-        return real_import(name, globals, locals, fromlist, level)
-
-    monkeypatch.setattr(builtins, "__import__", import_without_sb3)
-
     import sdam.policies.sb3_atari as sb3_atari
 
-    reloaded = importlib.reload(sb3_atari)
+    require_missing_sb3(monkeypatch, sb3_atari)
 
-    with pytest.raises(ImportError, match="Stable-Baselines3 is required"):
-        reloaded.SDAMAtariFeaturesExtractor(
-            FakeBox((4, 84, 84)),
-            static_dim=8,
-            dynamic_dim=8,
-            assoc_dim=16,
-            hidden_channels=4,
-            features_dim=32,
-            sequence_length=4,
-        )
+
+def test_fake_sb3_binding_does_not_leak_into_missing_sb3(monkeypatch, fake_sb3):
+    fake_sb3.SDAMAtariFeaturesExtractor(
+        FakeBox((4, 84, 84)),
+        static_dim=8,
+        dynamic_dim=8,
+        assoc_dim=16,
+        hidden_channels=4,
+        features_dim=32,
+        sequence_length=4,
+    )
+
+    require_missing_sb3(monkeypatch, fake_sb3)

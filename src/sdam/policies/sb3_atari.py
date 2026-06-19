@@ -10,11 +10,6 @@ _SB3_IMPORT_ERROR = (
     'Stable-Baselines3 is required for Atari experiments. Install with: pip install -e ".[atari]"'
 )
 
-try:
-    from stable_baselines3.common.torch_layers import BaseFeaturesExtractor as _BaseFeaturesExtractor
-except ImportError:
-    _BaseFeaturesExtractor = None
-
 
 def atari_observations_to_sdam(
     observations: torch.Tensor, sequence_length: int
@@ -33,9 +28,36 @@ def atari_observations_to_sdam(
     return converted.unsqueeze(2)
 
 
-class SDAMAtariFeaturesExtractor(
-    _BaseFeaturesExtractor if _BaseFeaturesExtractor is not None else nn.Module
-):
+def _load_base_features_extractor():
+    try:
+        from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
+    except ImportError as exc:
+        raise ImportError(_SB3_IMPORT_ERROR) from exc
+
+    return BaseFeaturesExtractor
+
+
+def _attach_loaded_base(instance: nn.Module, base_features_extractor: type[nn.Module]) -> None:
+    if isinstance(instance, base_features_extractor):
+        return
+
+    current_class = instance.__class__
+    optional_class = type(
+        f"{current_class.__name__}With{base_features_extractor.__name__}",
+        (current_class, base_features_extractor),
+        {"__module__": current_class.__module__},
+    )
+    instance.__class__ = optional_class
+
+
+class _OptionalBaseFeaturesExtractor(nn.Module):
+    def __init__(self, observation_space, features_dim: int) -> None:
+        base_features_extractor = _load_base_features_extractor()
+        _attach_loaded_base(self, base_features_extractor)
+        base_features_extractor.__init__(self, observation_space, features_dim)
+
+
+class SDAMAtariFeaturesExtractor(_OptionalBaseFeaturesExtractor):
     def __init__(
         self,
         observation_space,
@@ -46,14 +68,12 @@ class SDAMAtariFeaturesExtractor(
         features_dim: int,
         sequence_length: int,
     ) -> None:
-        if _BaseFeaturesExtractor is None:
-            raise ImportError(_SB3_IMPORT_ERROR)
+        super().__init__(observation_space, features_dim)
 
         expected_shape = (sequence_length, 84, 84)
         if tuple(observation_space.shape) != expected_shape:
             raise ValueError(f"observation_space shape must be ({sequence_length}, 84, 84)")
 
-        super().__init__(observation_space, features_dim)
         self.sequence_length = sequence_length
         self.encoder = SDAMEncoder(
             in_channels=1,
