@@ -102,6 +102,23 @@ python scripts/train_atari_sdam.py \
   --save-path runs/atari/sdam_ppo_smoke
 ```
 
+Run a simple NatureCNN vs SDAM comparison:
+
+```bash
+python scripts/compare_atari.py \
+  --config configs/atari/sdam_ppo.yaml \
+  --timesteps 100000 \
+  --eval-episodes 10 \
+  --output-dir runs/atari/compare_smoke
+```
+
+The comparison script writes:
+
+- `runs/atari/compare_smoke/comparison.csv`
+- `runs/atari/compare_smoke/comparison.md`
+- `runs/atari/compare_smoke/naturecnn.zip`
+- `runs/atari/compare_smoke/sdam.zip`
+
 Run the default configured Atari job:
 
 ```bash

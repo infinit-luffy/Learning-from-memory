@@ -16,9 +16,13 @@ warnings.filterwarnings(
 
 from sdam.config import load_atari_config
 from sdam.experiments.atari import (
+    compare_atari_methods,
     build_atari_env,
+    build_naturecnn_atari_model,
     build_sdam_atari_model,
     build_sdam_atari_policy_kwargs,
+    evaluate_atari_model,
+    format_comparison_markdown,
     train_sdam_atari,
 )
 from sdam.policies.sb3_atari import SDAMAtariFeaturesExtractor
@@ -187,6 +191,156 @@ def test_build_sdam_atari_model_uses_ppo_constructor(monkeypatch):
     assert received["kwargs"]["verbose"] == 2
 
 
+def test_build_naturecnn_atari_model_uses_default_cnn_policy(monkeypatch):
+    config = load_atari_config(CONFIG_PATH)
+    received = {}
+
+    class FakePPO:
+        def __init__(self, *args, **kwargs):
+            received["args"] = args
+            received["kwargs"] = kwargs
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
+
+    model = build_naturecnn_atari_model(config, env="fake-env", verbose=2)
+
+    assert isinstance(model, FakePPO)
+    assert received["args"] == ("CnnPolicy", "fake-env")
+    assert "policy_kwargs" not in received["kwargs"]
+    assert received["kwargs"]["learning_rate"] == config.ppo.learning_rate
+    assert received["kwargs"]["verbose"] == 2
+
+
+def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):
+    calls = {}
+
+    def fake_evaluate_policy(model, env, *, n_eval_episodes, deterministic, return_episode_rewards):
+        calls["model"] = model
+        calls["env"] = env
+        calls["n_eval_episodes"] = n_eval_episodes
+        calls["deterministic"] = deterministic
+        calls["return_episode_rewards"] = return_episode_rewards
+        return [1.0, 3.0], [10, 20]
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "_load_evaluate_policy", lambda: fake_evaluate_policy)
+
+    metrics = evaluate_atari_model("model", "env", n_eval_episodes=2)
+
+    assert calls == {
+        "model": "model",
+        "env": "env",
+        "n_eval_episodes": 2,
+        "deterministic": True,
+        "return_episode_rewards": True,
+    }
+    assert metrics == {
+        "mean_reward": 2.0,
+        "std_reward": 1.0,
+        "mean_ep_length": 15.0,
+        "episodes": 2,
+    }
+
+
+def test_compare_atari_methods_trains_and_evaluates_sdam_and_baseline(monkeypatch, tmp_path):
+    config = load_atari_config(CONFIG_PATH)
+    calls = {"closed": []}
+
+    class FakeEnv:
+        def __init__(self, name):
+            self.name = name
+
+        def close(self):
+            calls["closed"].append(self.name)
+
+    class FakeModel:
+        def __init__(self, name):
+            self.name = name
+
+        def learn(self, *, total_timesteps):
+            calls[f"{self.name}_timesteps"] = total_timesteps
+
+        def save(self, path):
+            calls[f"{self.name}_save_path"] = str(path)
+
+    import sdam.experiments.atari as atari
+
+    env_counter = {"value": 0}
+
+    def fake_build_atari_env(received_config):
+        env_counter["value"] += 1
+        return FakeEnv(f"env-{env_counter['value']}")
+
+    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+        calls["sdam_env"] = env.name
+        return FakeModel("sdam")
+
+    def fake_build_naturecnn_atari_model(received_config, env, *, verbose):
+        calls["naturecnn_env"] = env.name
+        return FakeModel("naturecnn")
+
+    def fake_evaluate_atari_model(model, env, *, n_eval_episodes):
+        return {
+            "mean_reward": 10.0 if model.name == "sdam" else 5.0,
+            "std_reward": 1.0,
+            "mean_ep_length": 20.0,
+            "episodes": n_eval_episodes,
+        }
+
+    monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
+    monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
+    monkeypatch.setattr(atari, "build_naturecnn_atari_model", fake_build_naturecnn_atari_model)
+    monkeypatch.setattr(atari, "evaluate_atari_model", fake_evaluate_atari_model)
+
+    rows = compare_atari_methods(
+        config,
+        total_timesteps=12,
+        eval_episodes=3,
+        output_dir=tmp_path,
+        methods=("naturecnn", "sdam"),
+        verbose=0,
+    )
+
+    assert [row["method"] for row in rows] == ["naturecnn", "sdam"]
+    assert rows[0]["mean_reward"] == 5.0
+    assert rows[1]["mean_reward"] == 10.0
+    assert calls["naturecnn_timesteps"] == 12
+    assert calls["sdam_timesteps"] == 12
+    assert calls["closed"] == ["env-1", "env-2"]
+    assert calls["naturecnn_save_path"].endswith("naturecnn.zip")
+    assert calls["sdam_save_path"].endswith("sdam.zip")
+
+
+def test_format_comparison_markdown_includes_methods_and_rewards():
+    markdown = format_comparison_markdown(
+        [
+            {
+                "method": "naturecnn",
+                "mean_reward": 5.0,
+                "std_reward": 1.0,
+                "mean_ep_length": 20.0,
+                "episodes": 3,
+                "model_path": "runs/naturecnn.zip",
+            },
+            {
+                "method": "sdam",
+                "mean_reward": 10.0,
+                "std_reward": 2.0,
+                "mean_ep_length": 30.0,
+                "episodes": 3,
+                "model_path": "runs/sdam.zip",
+            },
+        ]
+    )
+
+    assert "| Method | Mean Reward | Std Reward | Mean Episode Length | Episodes | Model Path |" in markdown
+    assert "| naturecnn | 5.000 | 1.000 | 20.000 | 3 | runs/naturecnn.zip |" in markdown
+    assert "| sdam | 10.000 | 2.000 | 30.000 | 3 | runs/sdam.zip |" in markdown
+
+
 def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
     config = load_atari_config(CONFIG_PATH)
     calls = {}
@@ -347,3 +501,17 @@ def test_train_atari_script_help_runs():
     assert "--config" in result.stdout
     assert "--timesteps" in result.stdout
     assert "--save-path" in result.stdout
+
+
+def test_compare_atari_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/compare_atari.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--timesteps" in result.stdout
+    assert "--eval-episodes" in result.stdout
+    assert "--output-dir" in result.stdout
