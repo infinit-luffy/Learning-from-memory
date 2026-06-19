@@ -25,6 +25,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--device", default="auto")
     parser.add_argument("--collect-log-interval", type=int, default=1000)
     parser.add_argument("--train-log-interval", type=int, default=100)
+    parser.add_argument("--alternating-log-interval", type=int, default=10)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -53,6 +54,7 @@ def main() -> None:
         device=args.device,
         collect_log_interval=args.collect_log_interval,
         train_log_interval=args.train_log_interval,
+        alternating_log_interval=args.alternating_log_interval,
         logger=logger,
     )
     print(f"dataset_path={result['dataset_path']}", flush=True)

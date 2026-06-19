@@ -17,6 +17,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("runs/atari/compare"))
     parser.add_argument("--verbose", type=int, default=1)
     parser.add_argument("--device", default="auto")
+    parser.add_argument("--alternating-log-interval", type=int, default=10)
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -33,6 +34,7 @@ def main() -> None:
     from sdam.experiments.atari import compare_atari_methods, format_comparison_markdown
 
     config = load_atari_config(args.config)
+    logger = lambda message: print(message, flush=True)
     rows = compare_atari_methods(
         config,
         total_timesteps=args.timesteps,
@@ -41,6 +43,8 @@ def main() -> None:
         methods=tuple(args.methods),
         verbose=args.verbose,
         device=args.device,
+        logger=logger,
+        auxiliary_log_interval=args.alternating_log_interval,
     )
     print(format_comparison_markdown(rows))
 

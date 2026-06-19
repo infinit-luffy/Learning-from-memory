@@ -119,6 +119,8 @@ def build_sdam_alternating_atari_model(
     env,
     verbose: int = 1,
     device: str = "auto",
+    logger: Callable[[str], None] | None = None,
+    auxiliary_log_interval: int = 10,
 ):
     return SDAMAlternatingPPO(
         "CnnPolicy",
@@ -149,6 +151,8 @@ def build_sdam_alternating_atari_model(
         pretrained_path=config.alternating.pretrained_path,
         reconstruction_weight=config.pretraining.reconstruction_weight,
         prediction_weight=config.pretraining.prediction_weight,
+        logger=logger,
+        auxiliary_log_interval=auxiliary_log_interval,
     )
 
 
@@ -343,6 +347,8 @@ class SDAMAlternatingPPO:
         pretrained_path: str = "",
         reconstruction_weight: float = 1.0,
         prediction_weight: float = 1.0,
+        logger: Callable[[str], None] | None = None,
+        auxiliary_log_interval: int = 10,
         **ppo_kwargs,
     ) -> None:
         if alternating_interval <= 0:
@@ -358,6 +364,8 @@ class SDAMAlternatingPPO:
         self.auxiliary_batch_size = auxiliary_batch_size
         self.reconstruction_weight = reconstruction_weight
         self.prediction_weight = prediction_weight
+        self.logger = logger
+        self.auxiliary_log_interval = auxiliary_log_interval
         self.autoencoder = autoencoder_class(**autoencoder_kwargs)
         self._tie_encoder_to_policy()
         self.autoencoder.to(self.device)
@@ -375,6 +383,12 @@ class SDAMAlternatingPPO:
             lr=auxiliary_learning_rate,
         )
         self.auxiliary_losses: list[float] = []
+        if self.logger is not None:
+            self.logger(
+                "[alternating] start "
+                f"interval={self.alternating_interval} updates={self.alternating_updates} "
+                f"batch_size={self.auxiliary_batch_size} device={self.device}"
+            )
 
     def __getattr__(self, name: str):
         if name == "model":
@@ -415,7 +429,21 @@ class SDAMAlternatingPPO:
             remaining -= chunk
             observations = self._rollout_observations()
             if observations is not None:
-                self.update_autoencoder(observations)
+                loss = self.update_autoencoder(observations)
+                update_count = len(self.auxiliary_losses)
+                if self.logger is not None and (
+                    update_count == self.alternating_updates
+                    or (
+                        self.auxiliary_log_interval > 0
+                        and update_count % self.auxiliary_log_interval == 0
+                    )
+                ):
+                    completed = total_timesteps - remaining
+                    self.logger(
+                        "[alternating] "
+                        f"timesteps={completed}/{total_timesteps} "
+                        f"aux_updates={update_count} loss={loss:.6f}"
+                    )
         return self
 
     def _rollout_observations(self) -> torch.Tensor | None:
@@ -513,6 +541,8 @@ def compare_atari_methods(
     methods: tuple[str, ...] = ("naturecnn", "sdam"),
     verbose: int = 1,
     device: str = "auto",
+    logger: Callable[[str], None] | None = None,
+    auxiliary_log_interval: int = 10,
 ) -> list[dict[str, str | float | int]]:
     if total_timesteps <= 0:
         raise ValueError("total_timesteps must be positive")
@@ -548,6 +578,8 @@ def compare_atari_methods(
                     env,
                     verbose=verbose,
                     device=device,
+                    logger=logger,
+                    auxiliary_log_interval=auxiliary_log_interval,
                 )
 
             model.learn(total_timesteps=total_timesteps)
@@ -576,6 +608,7 @@ def run_atari_sdam_pipeline(
     device: str = "auto",
     collect_log_interval: int = 1000,
     train_log_interval: int = 100,
+    alternating_log_interval: int = 10,
     logger: Callable[[str], None] | None = None,
 ) -> dict[str, str | list[dict[str, str | float | int]]]:
     output_path = Path(output_dir)
@@ -634,6 +667,8 @@ def run_atari_sdam_pipeline(
         methods=methods,
         verbose=verbose,
         device=device,
+        logger=logger,
+        auxiliary_log_interval=alternating_log_interval,
     )
     return {
         "dataset_path": str(collected_path),
