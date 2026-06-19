@@ -1,0 +1,91 @@
+import builtins
+import sys
+import warnings
+from pathlib import Path
+
+import pytest
+
+warnings.filterwarnings(
+    "ignore",
+    message="Failed to initialize NumPy: No module named 'numpy'.*",
+    category=UserWarning,
+)
+
+from sdam.config import load_atari_config
+from sdam.experiments.atari import (
+    build_atari_env,
+    build_sdam_atari_model,
+    build_sdam_atari_policy_kwargs,
+)
+from sdam.policies.sb3_atari import SDAMAtariFeaturesExtractor
+
+
+CONFIG_PATH = Path("configs/atari/sdam_ppo.yaml")
+
+
+def test_build_sdam_atari_policy_kwargs_uses_sdam_extractor():
+    config = load_atari_config(CONFIG_PATH)
+
+    policy_kwargs = build_sdam_atari_policy_kwargs(config)
+
+    assert policy_kwargs["features_extractor_class"] is SDAMAtariFeaturesExtractor
+    extractor_kwargs = policy_kwargs["features_extractor_kwargs"]
+    assert extractor_kwargs["sequence_length"] == config.env.n_stack
+    assert extractor_kwargs["features_dim"] == config.model.features_dim
+
+
+def test_build_atari_env_raises_clear_error_without_sb3(monkeypatch):
+    config = load_atari_config(CONFIG_PATH)
+    real_import = builtins.__import__
+
+    def import_without_sb3(name, globals=None, locals=None, fromlist=(), level=0):
+        if name == "stable_baselines3" or name.startswith("stable_baselines3."):
+            raise ModuleNotFoundError("No module named 'stable_baselines3'")
+        return real_import(name, globals, locals, fromlist, level)
+
+    monkeypatch.delitem(sys.modules, "stable_baselines3", raising=False)
+    monkeypatch.delitem(sys.modules, "stable_baselines3.common", raising=False)
+    monkeypatch.delitem(
+        sys.modules,
+        "stable_baselines3.common.env_util",
+        raising=False,
+    )
+    monkeypatch.delitem(
+        sys.modules,
+        "stable_baselines3.common.vec_env",
+        raising=False,
+    )
+    monkeypatch.setattr(builtins, "__import__", import_without_sb3)
+
+    with pytest.raises(ImportError, match="Stable-Baselines3 is required"):
+        build_atari_env(config)
+
+
+def test_build_sdam_atari_model_uses_ppo_constructor(monkeypatch):
+    config = load_atari_config(CONFIG_PATH)
+    received = {}
+
+    class FakePPO:
+        def __init__(self, *args, **kwargs):
+            received["args"] = args
+            received["kwargs"] = kwargs
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
+
+    model = build_sdam_atari_model(config, env="fake-env", verbose=2)
+
+    assert isinstance(model, FakePPO)
+    assert received["args"] == ("CnnPolicy", "fake-env")
+    assert (
+        received["kwargs"]["policy_kwargs"]["features_extractor_class"]
+        is SDAMAtariFeaturesExtractor
+    )
+    assert received["kwargs"]["learning_rate"] == config.ppo.learning_rate
+    assert received["kwargs"]["n_steps"] == config.ppo.n_steps
+    assert received["kwargs"]["batch_size"] == config.ppo.batch_size
+    assert received["kwargs"]["gamma"] == config.ppo.gamma
+    assert received["kwargs"]["gae_lambda"] == config.ppo.gae_lambda
+    assert received["kwargs"]["clip_range"] == config.ppo.clip_range
+    assert received["kwargs"]["verbose"] == 2
