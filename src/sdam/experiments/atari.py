@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 import time
 import warnings
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -558,6 +559,85 @@ def compare_atari_methods(
 
     write_comparison_outputs(rows, output_path)
     return rows
+
+
+def run_atari_sdam_pipeline(
+    config: AtariSDAMConfig,
+    output_dir: str | Path,
+    collect_steps: int | None = None,
+    pretrain_steps: int | None = None,
+    total_timesteps: int | None = None,
+    eval_episodes: int = 10,
+    methods: tuple[str, ...] = ("naturecnn", "sdam", "sdam_alternating"),
+    verbose: int = 1,
+    device: str = "auto",
+    collect_log_interval: int = 1000,
+    train_log_interval: int = 100,
+    logger: Callable[[str], None] | None = None,
+) -> dict[str, str | list[dict[str, str | float | int]]]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    dataset_path = output_path / "random_sequences.pt"
+    pretrain_path = output_path / "sdam_pretrain"
+    comparison_path = output_path / "compare"
+    steps = collect_steps if collect_steps is not None else config.pretraining.collect_steps
+    train_steps = (
+        pretrain_steps if pretrain_steps is not None else config.pretraining.train_steps
+    )
+    timesteps = (
+        total_timesteps
+        if total_timesteps is not None
+        else config.training.total_timesteps
+    )
+
+    if logger is not None:
+        logger("[pipeline] stage=collect")
+    env = None
+    try:
+        env = build_atari_env(config)
+        collected_path = collect_random_atari_sequences(
+            env,
+            steps=steps,
+            sequence_length=config.env.n_stack,
+            output_path=dataset_path,
+            log_interval=collect_log_interval,
+            logger=logger,
+        )
+    finally:
+        close = getattr(env, "close", None)
+        if close is not None:
+            close()
+
+    if logger is not None:
+        logger("[pipeline] stage=pretrain")
+    pretrain_result = SDAMAtariPretrainer(config, device=device).train(
+        dataset_path=collected_path,
+        save_path=pretrain_path,
+        train_steps=train_steps,
+        log_interval=train_log_interval,
+        logger=logger,
+    )
+    checkpoint_path = str(pretrain_result["checkpoint_path"])
+    alternating = replace(config.alternating, pretrained_path=checkpoint_path)
+    comparison_config = replace(config, alternating=alternating)
+
+    if logger is not None:
+        logger("[pipeline] stage=compare")
+    rows = compare_atari_methods(
+        comparison_config,
+        total_timesteps=timesteps,
+        eval_episodes=eval_episodes,
+        output_dir=comparison_path,
+        methods=methods,
+        verbose=verbose,
+        device=device,
+    )
+    return {
+        "dataset_path": str(collected_path),
+        "checkpoint_path": checkpoint_path,
+        "comparison_dir": str(comparison_path),
+        "rows": rows,
+    }
 
 
 def write_comparison_outputs(

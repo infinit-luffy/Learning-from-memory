@@ -119,7 +119,26 @@ The comparison script writes:
 - `runs/atari/compare_smoke/naturecnn.zip`
 - `runs/atari/compare_smoke/sdam.zip`
 
-Pretrain the SDAM Atari representation on random Alien interactions:
+Run the full Alien SDAM pipeline in one command:
+
+```bash
+python scripts/run_atari_sdam_pipeline.py \
+  --config configs/atari/alien_sdam_alternating_ppo.yaml \
+  --methods naturecnn sdam sdam_alternating \
+  --steps 50000 \
+  --train-steps 1000 \
+  --timesteps 100000 \
+  --eval-episodes 10 \
+  --device cuda \
+  --output-dir runs/alien/pipeline_100k
+```
+
+This command collects random Atari frame stacks, pretrains the SDAM
+autoencoder, then runs the PPO comparison. The `sdam_alternating` method
+continues alternating PPO updates with SDAM reconstruction/prediction updates
+during PPO training.
+
+For debugging, you can still run representation pretraining separately:
 
 ```bash
 python scripts/pretrain_atari_sdam.py \
@@ -128,7 +147,7 @@ python scripts/pretrain_atari_sdam.py \
   --save-path runs/alien/sdam_pretrain
 ```
 
-Run the Alien comparison with the alternating SDAM method:
+And then run the Alien comparison separately:
 
 ```bash
 python scripts/compare_atari.py \

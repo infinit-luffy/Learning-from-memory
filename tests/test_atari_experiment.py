@@ -27,6 +27,7 @@ from sdam.experiments.atari import (
     build_sdam_atari_policy_kwargs,
     evaluate_atari_model,
     format_comparison_markdown,
+    run_atari_sdam_pipeline,
     _resolve_device,
     _safe_torch_load,
     train_sdam_atari,
@@ -522,6 +523,94 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
     assert calls["sdam_alternating_save_path"].endswith("sdam_alternating.zip")
 
 
+def test_run_atari_sdam_pipeline_collects_pretrains_and_compares(monkeypatch, tmp_path):
+    config = load_atari_config(Path("configs/atari/alien_sdam_alternating_ppo.yaml"))
+    calls = {}
+
+    class FakeEnv:
+        def close(self):
+            calls["env_closed"] = True
+
+    class FakePretrainer:
+        def __init__(self, received_config, *, device):
+            calls["pretrainer_config"] = received_config
+            calls["pretrainer_device"] = device
+
+        def train(self, *, dataset_path, save_path, train_steps, log_interval, logger):
+            calls["train_dataset_path"] = str(dataset_path)
+            calls["train_save_path"] = str(save_path)
+            calls["train_steps"] = train_steps
+            logger("[fake] pretrain")
+            return {
+                "checkpoint_path": str(Path(save_path) / "sdam_autoencoder.pt"),
+                "loss": 0.5,
+                "train_steps": train_steps,
+                "device": "cuda",
+            }
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "build_atari_env", lambda received_config: FakeEnv())
+
+    def fake_collect(env, *, steps, sequence_length, output_path, log_interval, logger):
+        calls["collect_steps"] = steps
+        calls["collect_sequence_length"] = sequence_length
+        calls["collect_output_path"] = str(output_path)
+        logger("[fake] collect")
+        return output_path
+
+    def fake_compare(
+        received_config,
+        *,
+        total_timesteps,
+        eval_episodes,
+        output_dir,
+        methods,
+        verbose,
+        device,
+    ):
+        calls["compare_pretrained_path"] = received_config.alternating.pretrained_path
+        calls["compare_timesteps"] = total_timesteps
+        calls["compare_methods"] = methods
+        calls["compare_device"] = device
+        calls["compare_output_dir"] = str(output_dir)
+        return [{"method": "sdam_alternating", "mean_reward": 1.0}]
+
+    monkeypatch.setattr(atari, "collect_random_atari_sequences", fake_collect)
+    monkeypatch.setattr(atari, "SDAMAtariPretrainer", FakePretrainer)
+    monkeypatch.setattr(atari, "compare_atari_methods", fake_compare)
+    logs = []
+
+    result = run_atari_sdam_pipeline(
+        config,
+        output_dir=tmp_path,
+        collect_steps=7,
+        pretrain_steps=3,
+        total_timesteps=11,
+        eval_episodes=2,
+        methods=("sdam_alternating",),
+        verbose=0,
+        device="cuda",
+        collect_log_interval=5,
+        train_log_interval=1,
+        logger=logs.append,
+    )
+
+    assert calls["env_closed"]
+    assert calls["collect_steps"] == 7
+    assert calls["collect_sequence_length"] == config.env.n_stack
+    assert calls["pretrainer_device"] == "cuda"
+    assert calls["train_steps"] == 3
+    assert calls["compare_timesteps"] == 11
+    assert calls["compare_methods"] == ("sdam_alternating",)
+    assert calls["compare_device"] == "cuda"
+    assert calls["compare_pretrained_path"].endswith("sdam_pretrain/sdam_autoencoder.pt")
+    assert result["checkpoint_path"].endswith("sdam_pretrain/sdam_autoencoder.pt")
+    assert result["comparison_dir"].endswith("compare")
+    assert any("[pipeline] stage=collect" in message for message in logs)
+    assert any("[pipeline] stage=compare" in message for message in logs)
+
+
 def test_format_comparison_markdown_includes_methods_and_rewards():
     markdown = format_comparison_markdown(
         [
@@ -746,3 +835,20 @@ def test_pretrain_atari_script_help_runs():
     assert "--collect-log-interval" in result.stdout
     assert "--train-log-interval" in result.stdout
     assert "--save-path" in result.stdout
+
+
+def test_run_atari_sdam_pipeline_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_atari_sdam_pipeline.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--steps" in result.stdout
+    assert "--train-steps" in result.stdout
+    assert "--timesteps" in result.stdout
+    assert "--eval-episodes" in result.stdout
+    assert "--device" in result.stdout
+    assert "sdam_alternating" in result.stdout
