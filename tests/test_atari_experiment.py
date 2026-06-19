@@ -180,7 +180,7 @@ def test_build_sdam_atari_model_uses_ppo_constructor(monkeypatch):
 
     monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
 
-    model = build_sdam_atari_model(config, env="fake-env", verbose=2)
+    model = build_sdam_atari_model(config, env="fake-env", verbose=2, device="cuda")
 
     assert isinstance(model, FakePPO)
     assert received["args"] == ("CnnPolicy", "fake-env")
@@ -195,6 +195,7 @@ def test_build_sdam_atari_model_uses_ppo_constructor(monkeypatch):
     assert received["kwargs"]["gae_lambda"] == config.ppo.gae_lambda
     assert received["kwargs"]["clip_range"] == config.ppo.clip_range
     assert received["kwargs"]["verbose"] == 2
+    assert received["kwargs"]["device"] == "cuda"
 
 
 def test_build_naturecnn_atari_model_uses_default_cnn_policy(monkeypatch):
@@ -210,13 +211,14 @@ def test_build_naturecnn_atari_model_uses_default_cnn_policy(monkeypatch):
 
     monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
 
-    model = build_naturecnn_atari_model(config, env="fake-env", verbose=2)
+    model = build_naturecnn_atari_model(config, env="fake-env", verbose=2, device="cuda")
 
     assert isinstance(model, FakePPO)
     assert received["args"] == ("CnnPolicy", "fake-env")
     assert "policy_kwargs" not in received["kwargs"]
     assert received["kwargs"]["learning_rate"] == config.ppo.learning_rate
     assert received["kwargs"]["verbose"] == 2
+    assert received["kwargs"]["device"] == "cuda"
 
 
 def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
@@ -232,7 +234,7 @@ def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
 
     monkeypatch.setattr(atari, "SDAMAlternatingPPO", FakeAlternatingPPO)
 
-    model = build_sdam_alternating_atari_model(config, env="fake-env", verbose=2)
+    model = build_sdam_alternating_atari_model(config, env="fake-env", verbose=2, device="cuda")
 
     assert isinstance(model, FakeAlternatingPPO)
     assert received["args"] == ("CnnPolicy", "fake-env")
@@ -245,6 +247,7 @@ def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
     assert received["kwargs"]["alternating_updates"] == config.alternating.updates
     assert received["kwargs"]["reconstruction_weight"] == config.pretraining.reconstruction_weight
     assert received["kwargs"]["prediction_weight"] == config.pretraining.prediction_weight
+    assert received["kwargs"]["device"] == "cuda"
 
 
 def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):
@@ -456,16 +459,19 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
         env_counter["value"] += 1
         return FakeEnv(f"env-{env_counter['value']}")
 
-    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+    def fake_build_sdam_atari_model(received_config, env, *, verbose, device):
         calls["sdam_env"] = env.name
+        calls["sdam_device"] = device
         return FakeModel("sdam")
 
-    def fake_build_sdam_alternating_atari_model(received_config, env, *, verbose):
+    def fake_build_sdam_alternating_atari_model(received_config, env, *, verbose, device):
         calls["sdam_alternating_env"] = env.name
+        calls["sdam_alternating_device"] = device
         return FakeModel("sdam_alternating")
 
-    def fake_build_naturecnn_atari_model(received_config, env, *, verbose):
+    def fake_build_naturecnn_atari_model(received_config, env, *, verbose, device):
         calls["naturecnn_env"] = env.name
+        calls["naturecnn_device"] = device
         return FakeModel("naturecnn")
 
     def fake_evaluate_atari_model(model, env, *, n_eval_episodes):
@@ -497,6 +503,7 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
         output_dir=tmp_path,
         methods=("naturecnn", "sdam", "sdam_alternating"),
         verbose=0,
+        device="cuda",
     )
 
     assert [row["method"] for row in rows] == ["naturecnn", "sdam", "sdam_alternating"]
@@ -507,6 +514,9 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
     assert calls["sdam_timesteps"] == 12
     assert calls["sdam_alternating_timesteps"] == 12
     assert calls["closed"] == ["env-1", "env-2", "env-3"]
+    assert calls["naturecnn_device"] == "cuda"
+    assert calls["sdam_device"] == "cuda"
+    assert calls["sdam_alternating_device"] == "cuda"
     assert calls["naturecnn_save_path"].endswith("naturecnn.zip")
     assert calls["sdam_save_path"].endswith("sdam.zip")
     assert calls["sdam_alternating_save_path"].endswith("sdam_alternating.zip")
@@ -570,10 +580,11 @@ def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
         calls["build_env_config"] = received_config
         return fake_env
 
-    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+    def fake_build_sdam_atari_model(received_config, env, *, verbose, device):
         calls["build_model_config"] = received_config
         calls["build_model_env"] = env
         calls["build_model_verbose"] = verbose
+        calls["build_model_device"] = device
         return fake_model
 
     monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
@@ -585,6 +596,7 @@ def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
         total_timesteps=12,
         save_path=save_path,
         verbose=3,
+        device="cuda",
     )
 
     assert model is fake_model
@@ -592,6 +604,7 @@ def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
     assert calls["build_model_config"] is config
     assert calls["build_model_env"] is fake_env
     assert calls["build_model_verbose"] == 3
+    assert calls["build_model_device"] == "cuda"
     assert fake_model.learn_timesteps == 12
     assert fake_model.save_path == save_path
     assert fake_env.closed
@@ -639,7 +652,7 @@ def test_train_sdam_atari_closes_env_when_model_construction_raises(monkeypatch)
 
     monkeypatch.setattr(atari, "build_atari_env", lambda received_config: fake_env)
 
-    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+    def fake_build_sdam_atari_model(received_config, env, *, verbose, device):
         raise RuntimeError("model construction failed")
 
     monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
@@ -675,7 +688,7 @@ def test_train_sdam_atari_closes_env_when_learn_raises(monkeypatch, tmp_path):
     monkeypatch.setattr(
         atari,
         "build_sdam_atari_model",
-        lambda received_config, env, *, verbose: FakeModel(),
+        lambda received_config, env, *, verbose, device: FakeModel(),
     )
 
     with pytest.raises(RuntimeError, match="learn failed"):
@@ -699,6 +712,7 @@ def test_train_atari_script_help_runs():
     assert "--config" in result.stdout
     assert "--timesteps" in result.stdout
     assert "--save-path" in result.stdout
+    assert "--device" in result.stdout
 
 
 def test_compare_atari_script_help_runs():
@@ -713,6 +727,7 @@ def test_compare_atari_script_help_runs():
     assert "--timesteps" in result.stdout
     assert "--eval-episodes" in result.stdout
     assert "--output-dir" in result.stdout
+    assert "--device" in result.stdout
     assert "sdam_alternating" in result.stdout
 
 

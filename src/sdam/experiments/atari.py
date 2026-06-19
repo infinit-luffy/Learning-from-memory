@@ -91,7 +91,12 @@ def build_atari_env(config: AtariSDAMConfig):
     return VecFrameStack(env, n_stack=config.env.n_stack)
 
 
-def build_sdam_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
+def build_sdam_atari_model(
+    config: AtariSDAMConfig,
+    env,
+    verbose: int = 1,
+    device: str = "auto",
+):
     PPO = _load_ppo()
     return PPO(
         "CnnPolicy",
@@ -104,10 +109,16 @@ def build_sdam_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
         gae_lambda=config.ppo.gae_lambda,
         clip_range=config.ppo.clip_range,
         verbose=verbose,
+        device=device,
     )
 
 
-def build_sdam_alternating_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
+def build_sdam_alternating_atari_model(
+    config: AtariSDAMConfig,
+    env,
+    verbose: int = 1,
+    device: str = "auto",
+):
     return SDAMAlternatingPPO(
         "CnnPolicy",
         env,
@@ -119,6 +130,7 @@ def build_sdam_alternating_atari_model(config: AtariSDAMConfig, env, verbose: in
         gae_lambda=config.ppo.gae_lambda,
         clip_range=config.ppo.clip_range,
         verbose=verbose,
+        device=device,
         autoencoder_class=SDAMAtariAutoEncoder,
         autoencoder_kwargs={
             "sequence_length": config.env.n_stack,
@@ -139,7 +151,12 @@ def build_sdam_alternating_atari_model(config: AtariSDAMConfig, env, verbose: in
     )
 
 
-def build_naturecnn_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
+def build_naturecnn_atari_model(
+    config: AtariSDAMConfig,
+    env,
+    verbose: int = 1,
+    device: str = "auto",
+):
     PPO = _load_ppo()
     return PPO(
         "CnnPolicy",
@@ -151,6 +168,7 @@ def build_naturecnn_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
         gae_lambda=config.ppo.gae_lambda,
         clip_range=config.ppo.clip_range,
         verbose=verbose,
+        device=device,
     )
 
 
@@ -458,6 +476,7 @@ def train_sdam_atari(
     total_timesteps: int | None = None,
     save_path: str | Path | None = None,
     verbose: int = 1,
+    device: str = "auto",
 ):
     steps = (
         total_timesteps
@@ -470,7 +489,7 @@ def train_sdam_atari(
     env = None
     try:
         env = build_atari_env(config)
-        model = build_sdam_atari_model(config, env, verbose=verbose)
+        model = build_sdam_atari_model(config, env, verbose=verbose, device=device)
         output_path = Path(save_path if save_path is not None else config.training.save_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         model.learn(total_timesteps=steps)
@@ -489,6 +508,7 @@ def compare_atari_methods(
     output_dir: str | Path,
     methods: tuple[str, ...] = ("naturecnn", "sdam"),
     verbose: int = 1,
+    device: str = "auto",
 ) -> list[dict[str, str | float | int]]:
     if total_timesteps <= 0:
         raise ValueError("total_timesteps must be positive")
@@ -505,11 +525,26 @@ def compare_atari_methods(
         try:
             env = build_atari_env(config)
             if method == "naturecnn":
-                model = build_naturecnn_atari_model(config, env, verbose=verbose)
+                model = build_naturecnn_atari_model(
+                    config,
+                    env,
+                    verbose=verbose,
+                    device=device,
+                )
             elif method == "sdam":
-                model = build_sdam_atari_model(config, env, verbose=verbose)
+                model = build_sdam_atari_model(
+                    config,
+                    env,
+                    verbose=verbose,
+                    device=device,
+                )
             else:
-                model = build_sdam_alternating_atari_model(config, env, verbose=verbose)
+                model = build_sdam_alternating_atari_model(
+                    config,
+                    env,
+                    verbose=verbose,
+                    device=device,
+                )
 
             model.learn(total_timesteps=total_timesteps)
             model_path = output_path / f"{method}.zip"

@@ -17,6 +17,7 @@ def main() -> None:
     parser.add_argument("--timesteps", type=int, default=None)
     parser.add_argument("--save-path", type=Path, default=None)
     parser.add_argument("--verbose", type=int, default=1)
+    parser.add_argument("--device", default="auto")
     args = parser.parse_args()
 
     from sdam.config import load_atari_config
@@ -28,6 +29,7 @@ def main() -> None:
         total_timesteps=args.timesteps,
         save_path=args.save_path,
         verbose=args.verbose,
+        device=args.device,
     )
 
 

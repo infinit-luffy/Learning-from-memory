@@ -16,6 +16,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--eval-episodes", type=int, default=5)
     parser.add_argument("--output-dir", type=Path, default=Path("runs/atari/compare"))
     parser.add_argument("--verbose", type=int, default=1)
+    parser.add_argument("--device", default="auto")
     parser.add_argument(
         "--methods",
         nargs="+",
@@ -39,6 +40,7 @@ def main() -> None:
         output_dir=args.output_dir,
         methods=tuple(args.methods),
         verbose=args.verbose,
+        device=args.device,
     )
     print(format_comparison_markdown(rows))
 
