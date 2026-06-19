@@ -297,7 +297,7 @@ def test_collect_random_atari_sequences_samples_expected_shape(tmp_path):
                 (4, 84, 84),
                 self.step_count,
                 dtype=torch.uint8,
-            ).numpy()
+            )
             return observation, 0.0, False, {}
 
     output_path = tmp_path / "random_sequences.pt"
@@ -313,6 +313,37 @@ def test_collect_random_atari_sequences_samples_expected_shape(tmp_path):
     payload = torch.load(output_path)
     assert payload["observations"].shape == (5, 4, 84, 84)
     assert payload["observations"].dtype == torch.uint8
+
+
+def test_collect_random_atari_sequences_accepts_channel_last_vec_stack(tmp_path):
+    class FakeActionSpace:
+        def sample(self):
+            return 0
+
+    class FakeEnv:
+        action_space = FakeActionSpace()
+        num_envs = 1
+
+        def reset(self):
+            return torch.zeros(1, 84, 84, 4, dtype=torch.uint8)
+
+        def step(self, action):
+            observation = torch.zeros(1, 84, 84, 4, dtype=torch.uint8)
+            observation[0, :, :, 2] = 7
+            return observation, torch.tensor([0.0]), torch.tensor([False]), [{}]
+
+    output_path = tmp_path / "channel_last_sequences.pt"
+
+    collect_random_atari_sequences(
+        FakeEnv(),
+        steps=1,
+        sequence_length=4,
+        output_path=output_path,
+    )
+
+    payload = torch.load(output_path)
+    assert payload["observations"].shape == (1, 4, 84, 84)
+    assert torch.all(payload["observations"][0, 2] == 7)
 
 
 def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):

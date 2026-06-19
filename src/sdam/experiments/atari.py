@@ -153,9 +153,14 @@ def _first_observation(observation, sequence_length: int) -> torch.Tensor:
     tensor = torch.as_tensor(observation)
     if tensor.ndim == 4:
         tensor = tensor[0]
+    if tensor.shape == (84, 84, sequence_length):
+        tensor = tensor.permute(2, 0, 1)
     if tensor.shape != (sequence_length, 84, 84):
-        raise ValueError("Atari observations must have shape [T, 84, 84] or [N, T, 84, 84]")
-    return tensor.detach().cpu().to(torch.uint8)
+        raise ValueError(
+            "Atari observations must have shape [T, 84, 84], [84, 84, T], "
+            f"[N, T, 84, 84], or [N, 84, 84, T]; got {tuple(tensor.shape)}"
+        )
+    return tensor.detach().cpu()
 
 
 def collect_random_atari_sequences(
