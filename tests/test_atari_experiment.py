@@ -1,5 +1,6 @@
 import builtins
 import importlib
+import subprocess
 import sys
 import types
 import warnings
@@ -18,6 +19,7 @@ from sdam.experiments.atari import (
     build_atari_env,
     build_sdam_atari_model,
     build_sdam_atari_policy_kwargs,
+    train_sdam_atari,
 )
 from sdam.policies.sb3_atari import SDAMAtariFeaturesExtractor
 
@@ -183,3 +185,74 @@ def test_build_sdam_atari_model_uses_ppo_constructor(monkeypatch):
     assert received["kwargs"]["gae_lambda"] == config.ppo.gae_lambda
     assert received["kwargs"]["clip_range"] == config.ppo.clip_range
     assert received["kwargs"]["verbose"] == 2
+
+
+def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
+    config = load_atari_config(CONFIG_PATH)
+    calls = {}
+
+    class FakeEnv:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeModel:
+        def __init__(self):
+            self.learn_timesteps = None
+            self.save_path = None
+
+        def learn(self, *, total_timesteps):
+            self.learn_timesteps = total_timesteps
+
+        def save(self, path):
+            self.save_path = path
+
+    fake_env = FakeEnv()
+    fake_model = FakeModel()
+
+    import sdam.experiments.atari as atari
+
+    def fake_build_atari_env(received_config):
+        calls["build_env_config"] = received_config
+        return fake_env
+
+    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+        calls["build_model_config"] = received_config
+        calls["build_model_env"] = env
+        calls["build_model_verbose"] = verbose
+        return fake_model
+
+    monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
+    monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
+
+    save_path = tmp_path / "model"
+    model = train_sdam_atari(
+        config,
+        total_timesteps=12,
+        save_path=save_path,
+        verbose=3,
+    )
+
+    assert model is fake_model
+    assert calls["build_env_config"] is config
+    assert calls["build_model_config"] is config
+    assert calls["build_model_env"] is fake_env
+    assert calls["build_model_verbose"] == 3
+    assert fake_model.learn_timesteps == 12
+    assert fake_model.save_path == save_path
+    assert fake_env.closed
+
+
+def test_train_atari_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/train_atari_sdam.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--timesteps" in result.stdout
+    assert "--save-path" in result.stdout

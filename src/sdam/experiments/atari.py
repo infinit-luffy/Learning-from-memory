@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from sdam.config import AtariSDAMConfig
@@ -69,3 +70,29 @@ def build_sdam_atari_model(config: AtariSDAMConfig, env, verbose: int = 1):
         clip_range=config.ppo.clip_range,
         verbose=verbose,
     )
+
+
+def train_sdam_atari(
+    config: AtariSDAMConfig,
+    total_timesteps: int | None = None,
+    save_path: str | Path | None = None,
+    verbose: int = 1,
+):
+    env = None
+    try:
+        env = build_atari_env(config)
+        model = build_sdam_atari_model(config, env, verbose=verbose)
+        steps = (
+            total_timesteps
+            if total_timesteps is not None
+            else config.training.total_timesteps
+        )
+        output_path = Path(save_path if save_path is not None else config.training.save_path)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        model.learn(total_timesteps=steps)
+        model.save(output_path)
+        return model
+    finally:
+        close = getattr(env, "close", None)
+        if close is not None:
+            close()
