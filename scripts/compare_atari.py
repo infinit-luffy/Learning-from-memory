@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train and evaluate NatureCNN PPO versus SDAM PPO on one Atari config."
+        description="Train and evaluate NatureCNN, SDAM, and alternating SDAM PPO on one Atari config."
     )
     parser.add_argument("--config", type=Path, default=Path("configs/atari/sdam_ppo.yaml"))
     parser.add_argument("--timesteps", type=int, default=1000)
@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--methods",
         nargs="+",
-        choices=("naturecnn", "sdam"),
+        choices=("naturecnn", "sdam", "sdam_alternating"),
         default=("naturecnn", "sdam"),
     )
     return parser.parse_args()

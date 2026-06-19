@@ -7,6 +7,7 @@ import torch
 from torch import nn
 
 from sdam.policies import atari_observations_to_sdam
+from sdam.policies.sb3_atari import SDAMAtariAutoEncoder
 
 
 class FakeBox:
@@ -129,6 +130,29 @@ def test_sdam_atari_features_extractor_returns_features(fake_sb3):
 
     assert features.shape == (2, 32)
     assert extractor.features_dim == 32
+
+
+def test_sdam_atari_autoencoder_reconstructs_and_predicts_frames():
+    model = SDAMAtariAutoEncoder(
+        sequence_length=4,
+        static_dim=8,
+        dynamic_dim=8,
+        assoc_dim=16,
+        hidden_channels=4,
+    )
+    observations = torch.rand(2, 4, 1, 84, 84)
+
+    outputs = model(observations)
+
+    assert outputs["reconstruction"].shape == (2, 4, 1, 84, 84)
+    assert outputs["prediction"].shape == (2, 3, 1, 84, 84)
+    assert outputs["loss"].ndim == 0
+    outputs["loss"].backward()
+    assert any(
+        parameter.grad is not None
+        for parameter in model.parameters()
+        if parameter.requires_grad
+    )
 
 
 def test_sdam_atari_features_extractor_requires_matching_observation_space(fake_sb3):

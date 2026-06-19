@@ -119,6 +119,30 @@ The comparison script writes:
 - `runs/atari/compare_smoke/naturecnn.zip`
 - `runs/atari/compare_smoke/sdam.zip`
 
+Pretrain the SDAM Atari representation on random Alien interactions:
+
+```bash
+python scripts/pretrain_atari_sdam.py \
+  --config configs/atari/alien_sdam_pretrain.yaml \
+  --steps 50000 \
+  --save-path runs/alien/sdam_pretrain
+```
+
+Run the Alien comparison with the alternating SDAM method:
+
+```bash
+python scripts/compare_atari.py \
+  --config configs/atari/alien_sdam_alternating_ppo.yaml \
+  --methods naturecnn sdam sdam_alternating \
+  --timesteps 100000 \
+  --eval-episodes 10 \
+  --output-dir runs/alien/compare_100k
+```
+
+For a quick server smoke test, reduce `--steps`, `--timesteps`, and
+`--eval-episodes`. If the configured pretraining checkpoint is missing, the
+alternating method warns and starts from randomly initialized SDAM weights.
+
 Run the default configured Atari job:
 
 ```bash

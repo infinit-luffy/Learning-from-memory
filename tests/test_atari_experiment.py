@@ -7,6 +7,7 @@ import warnings
 from pathlib import Path
 
 import pytest
+import torch
 
 warnings.filterwarnings(
     "ignore",
@@ -16,8 +17,11 @@ warnings.filterwarnings(
 
 from sdam.config import load_atari_config
 from sdam.experiments.atari import (
+    SDAMAtariPretrainer,
+    collect_random_atari_sequences,
     compare_atari_methods,
     build_atari_env,
+    build_sdam_alternating_atari_model,
     build_naturecnn_atari_model,
     build_sdam_atari_model,
     build_sdam_atari_policy_kwargs,
@@ -25,7 +29,7 @@ from sdam.experiments.atari import (
     format_comparison_markdown,
     train_sdam_atari,
 )
-from sdam.policies.sb3_atari import SDAMAtariFeaturesExtractor
+from sdam.policies.sb3_atari import SDAMAtariAutoEncoder, SDAMAtariFeaturesExtractor
 
 
 CONFIG_PATH = Path("configs/atari/sdam_ppo.yaml")
@@ -213,6 +217,34 @@ def test_build_naturecnn_atari_model_uses_default_cnn_policy(monkeypatch):
     assert received["kwargs"]["verbose"] == 2
 
 
+def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
+    config = load_atari_config(Path("configs/atari/alien_sdam_alternating_ppo.yaml"))
+    received = {}
+
+    class FakeAlternatingPPO:
+        def __init__(self, *args, **kwargs):
+            received["args"] = args
+            received["kwargs"] = kwargs
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "SDAMAlternatingPPO", FakeAlternatingPPO)
+
+    model = build_sdam_alternating_atari_model(config, env="fake-env", verbose=2)
+
+    assert isinstance(model, FakeAlternatingPPO)
+    assert received["args"] == ("CnnPolicy", "fake-env")
+    assert (
+        received["kwargs"]["policy_kwargs"]["features_extractor_class"]
+        is SDAMAtariFeaturesExtractor
+    )
+    assert received["kwargs"]["autoencoder_class"] is SDAMAtariAutoEncoder
+    assert received["kwargs"]["alternating_interval"] == config.alternating.interval
+    assert received["kwargs"]["alternating_updates"] == config.alternating.updates
+    assert received["kwargs"]["reconstruction_weight"] == config.pretraining.reconstruction_weight
+    assert received["kwargs"]["prediction_weight"] == config.pretraining.prediction_weight
+
+
 def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):
     calls = {}
 
@@ -245,7 +277,71 @@ def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):
     }
 
 
-def test_compare_atari_methods_trains_and_evaluates_sdam_and_baseline(monkeypatch, tmp_path):
+def test_collect_random_atari_sequences_samples_expected_shape(tmp_path):
+    class FakeActionSpace:
+        def sample(self):
+            return 0
+
+    class FakeEnv:
+        action_space = FakeActionSpace()
+
+        def __init__(self):
+            self.step_count = 0
+
+        def reset(self):
+            return torch.zeros(4, 84, 84, dtype=torch.uint8)
+
+        def step(self, action):
+            self.step_count += 1
+            observation = torch.full(
+                (4, 84, 84),
+                self.step_count,
+                dtype=torch.uint8,
+            ).numpy()
+            return observation, 0.0, False, {}
+
+    output_path = tmp_path / "random_sequences.pt"
+
+    dataset_path = collect_random_atari_sequences(
+        FakeEnv(),
+        steps=5,
+        sequence_length=4,
+        output_path=output_path,
+    )
+
+    assert dataset_path == output_path
+    payload = torch.load(output_path)
+    assert payload["observations"].shape == (5, 4, 84, 84)
+    assert payload["observations"].dtype == torch.uint8
+
+
+def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):
+    config = load_atari_config(Path("configs/atari/alien_sdam_pretrain.yaml"))
+    observations = torch.randint(
+        0,
+        256,
+        (4, config.env.n_stack, 84, 84),
+        dtype=torch.uint8,
+    )
+    dataset_path = tmp_path / "dataset.pt"
+    torch.save({"observations": observations}, dataset_path)
+
+    pretrainer = SDAMAtariPretrainer(config)
+    result = pretrainer.train(
+        dataset_path=dataset_path,
+        save_path=tmp_path / "pretrain",
+        train_steps=1,
+    )
+
+    assert result["checkpoint_path"].endswith("sdam_autoencoder.pt")
+    assert Path(result["checkpoint_path"]).exists()
+    assert result["loss"] >= 0.0
+
+
+def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternating(
+    monkeypatch,
+    tmp_path,
+):
     config = load_atari_config(CONFIG_PATH)
     calls = {"closed": []}
 
@@ -278,13 +374,21 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_and_baseline(monkeypatc
         calls["sdam_env"] = env.name
         return FakeModel("sdam")
 
+    def fake_build_sdam_alternating_atari_model(received_config, env, *, verbose):
+        calls["sdam_alternating_env"] = env.name
+        return FakeModel("sdam_alternating")
+
     def fake_build_naturecnn_atari_model(received_config, env, *, verbose):
         calls["naturecnn_env"] = env.name
         return FakeModel("naturecnn")
 
     def fake_evaluate_atari_model(model, env, *, n_eval_episodes):
         return {
-            "mean_reward": 10.0 if model.name == "sdam" else 5.0,
+            "mean_reward": {
+                "naturecnn": 5.0,
+                "sdam": 10.0,
+                "sdam_alternating": 15.0,
+            }[model.name],
             "std_reward": 1.0,
             "mean_ep_length": 20.0,
             "episodes": n_eval_episodes,
@@ -292,6 +396,11 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_and_baseline(monkeypatc
 
     monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
     monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
+    monkeypatch.setattr(
+        atari,
+        "build_sdam_alternating_atari_model",
+        fake_build_sdam_alternating_atari_model,
+    )
     monkeypatch.setattr(atari, "build_naturecnn_atari_model", fake_build_naturecnn_atari_model)
     monkeypatch.setattr(atari, "evaluate_atari_model", fake_evaluate_atari_model)
 
@@ -300,18 +409,21 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_and_baseline(monkeypatc
         total_timesteps=12,
         eval_episodes=3,
         output_dir=tmp_path,
-        methods=("naturecnn", "sdam"),
+        methods=("naturecnn", "sdam", "sdam_alternating"),
         verbose=0,
     )
 
-    assert [row["method"] for row in rows] == ["naturecnn", "sdam"]
+    assert [row["method"] for row in rows] == ["naturecnn", "sdam", "sdam_alternating"]
     assert rows[0]["mean_reward"] == 5.0
     assert rows[1]["mean_reward"] == 10.0
+    assert rows[2]["mean_reward"] == 15.0
     assert calls["naturecnn_timesteps"] == 12
     assert calls["sdam_timesteps"] == 12
-    assert calls["closed"] == ["env-1", "env-2"]
+    assert calls["sdam_alternating_timesteps"] == 12
+    assert calls["closed"] == ["env-1", "env-2", "env-3"]
     assert calls["naturecnn_save_path"].endswith("naturecnn.zip")
     assert calls["sdam_save_path"].endswith("sdam.zip")
+    assert calls["sdam_alternating_save_path"].endswith("sdam_alternating.zip")
 
 
 def test_format_comparison_markdown_includes_methods_and_rewards():
@@ -515,3 +627,18 @@ def test_compare_atari_script_help_runs():
     assert "--timesteps" in result.stdout
     assert "--eval-episodes" in result.stdout
     assert "--output-dir" in result.stdout
+    assert "sdam_alternating" in result.stdout
+
+
+def test_pretrain_atari_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/pretrain_atari_sdam.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--steps" in result.stdout
+    assert "--train-steps" in result.stdout
+    assert "--save-path" in result.stdout

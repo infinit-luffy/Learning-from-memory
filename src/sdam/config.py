@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import get_type_hints
 
@@ -80,11 +80,33 @@ class AtariTrainingConfig:
 
 
 @dataclass(frozen=True)
+class AtariPretrainingConfig:
+    collect_steps: int = 50000
+    train_steps: int = 1000
+    batch_size: int = 32
+    learning_rate: float = 0.0003
+    reconstruction_weight: float = 1.0
+    prediction_weight: float = 1.0
+    dataset_path: str = "runs/atari/random_sequences.pt"
+
+
+@dataclass(frozen=True)
+class AtariAlternatingConfig:
+    interval: int = 1
+    updates: int = 1
+    batch_size: int = 32
+    learning_rate: float = 0.0001
+    pretrained_path: str = ""
+
+
+@dataclass(frozen=True)
 class AtariSDAMConfig:
     env: AtariEnvConfig
     model: AtariModelConfig
     ppo: AtariPPOConfig
     training: AtariTrainingConfig
+    pretraining: AtariPretrainingConfig = field(default_factory=AtariPretrainingConfig)
+    alternating: AtariAlternatingConfig = field(default_factory=AtariAlternatingConfig)
 
 
 def load_config(path: str | Path) -> SDAMConfig:
@@ -116,8 +138,10 @@ def load_atari_config(path: str | Path) -> AtariSDAMConfig:
     if not isinstance(raw, dict):
         raise ValueError("config root must be a mapping")
 
-    section_names = ("env", "model", "ppo", "training")
-    for section in section_names:
+    required_sections = ("env", "model", "ppo", "training")
+    optional_sections = ("pretraining", "alternating")
+    section_names = required_sections + optional_sections
+    for section in required_sections:
         if section not in raw:
             raise ValueError(f"missing required section: {section}")
 
@@ -129,7 +153,24 @@ def load_atari_config(path: str | Path) -> AtariSDAMConfig:
     model = _load_section("model", raw["model"], AtariModelConfig)
     ppo = _load_section("ppo", raw["ppo"], AtariPPOConfig)
     training = _load_section("training", raw["training"], AtariTrainingConfig)
-    config = AtariSDAMConfig(env=env, model=model, ppo=ppo, training=training)
+    pretraining = (
+        _load_section("pretraining", raw["pretraining"], AtariPretrainingConfig)
+        if "pretraining" in raw
+        else AtariPretrainingConfig()
+    )
+    alternating = (
+        _load_section("alternating", raw["alternating"], AtariAlternatingConfig)
+        if "alternating" in raw
+        else AtariAlternatingConfig()
+    )
+    config = AtariSDAMConfig(
+        env=env,
+        model=model,
+        ppo=ppo,
+        training=training,
+        pretraining=pretraining,
+        alternating=alternating,
+    )
     _validate_atari_config(config)
     return config
 
@@ -241,3 +282,25 @@ def _validate_atari_config(config: AtariSDAMConfig) -> None:
         raise ValueError("training.total_timesteps must be positive")
     if not config.training.save_path.strip():
         raise ValueError("training.save_path must be non-empty")
+    if config.pretraining.collect_steps <= 0:
+        raise ValueError("pretraining.collect_steps must be positive")
+    if config.pretraining.train_steps <= 0:
+        raise ValueError("pretraining.train_steps must be positive")
+    if config.pretraining.batch_size <= 0:
+        raise ValueError("pretraining.batch_size must be positive")
+    if config.pretraining.learning_rate <= 0:
+        raise ValueError("pretraining.learning_rate must be positive")
+    if config.pretraining.reconstruction_weight < 0:
+        raise ValueError("pretraining.reconstruction_weight must be non-negative")
+    if config.pretraining.prediction_weight < 0:
+        raise ValueError("pretraining.prediction_weight must be non-negative")
+    if not config.pretraining.dataset_path.strip():
+        raise ValueError("pretraining.dataset_path must be non-empty")
+    if config.alternating.interval <= 0:
+        raise ValueError("alternating.interval must be positive")
+    if config.alternating.updates <= 0:
+        raise ValueError("alternating.updates must be positive")
+    if config.alternating.batch_size <= 0:
+        raise ValueError("alternating.batch_size must be positive")
+    if config.alternating.learning_rate <= 0:
+        raise ValueError("alternating.learning_rate must be positive")
