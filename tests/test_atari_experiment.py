@@ -18,6 +18,7 @@ warnings.filterwarnings(
 from sdam.config import load_atari_config
 from sdam.experiments.atari import (
     SDAMAtariPretrainer,
+    SDAMAlternatingPPO,
     collect_random_atari_sequences,
     compare_atari_methods,
     build_atari_env,
@@ -249,6 +250,54 @@ def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
     assert received["kwargs"]["reconstruction_weight"] == config.pretraining.reconstruction_weight
     assert received["kwargs"]["prediction_weight"] == config.pretraining.prediction_weight
     assert received["kwargs"]["device"] == "cuda"
+
+
+def test_sdam_alternating_ppo_aligns_autoencoder_to_model_device(monkeypatch):
+    import sdam.experiments.atari as atari
+
+    class FakePPO:
+        def __init__(self, *args, **kwargs):
+            self.env = types.SimpleNamespace(num_envs=1)
+            self.n_steps = 1
+            self.device = torch.device("cpu")
+            self.policy = types.SimpleNamespace(
+                features_extractor=types.SimpleNamespace(encoder=torch.nn.Identity())
+            )
+
+    class FakeAutoEncoder(torch.nn.Module):
+        def __init__(self):
+            super().__init__()
+            self.sequence_length = 4
+            self.encoder = torch.nn.Identity()
+            self.param = torch.nn.Parameter(torch.tensor(1.0))
+            self.to_device = None
+
+        def to(self, device):
+            self.to_device = torch.device(device)
+            return super().to(device)
+
+        def forward(self, batch):
+            assert batch.device == self.to_device
+            return {"loss": self.param * batch.sum() * 0.0}
+
+    monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
+
+    model = SDAMAlternatingPPO(
+        "CnnPolicy",
+        "fake-env",
+        autoencoder_class=FakeAutoEncoder,
+        autoencoder_kwargs={},
+        alternating_interval=1,
+        alternating_updates=1,
+        auxiliary_batch_size=1,
+        auxiliary_learning_rate=0.001,
+        device="cpu",
+    )
+
+    assert model.device == torch.device("cpu")
+    assert model.autoencoder.to_device == torch.device("cpu")
+    model.update_autoencoder(torch.zeros(1, 4, 84, 84))
+    assert model.auxiliary_losses == [0.0]
 
 
 def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):

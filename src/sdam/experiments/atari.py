@@ -352,6 +352,7 @@ class SDAMAlternatingPPO:
 
         PPO = _load_ppo()
         self.model = PPO(*ppo_args, **ppo_kwargs)
+        self.device = torch.device(getattr(self.model, "device", ppo_kwargs.get("device", "cpu")))
         self.alternating_interval = alternating_interval
         self.alternating_updates = alternating_updates
         self.auxiliary_batch_size = auxiliary_batch_size
@@ -359,6 +360,7 @@ class SDAMAlternatingPPO:
         self.prediction_weight = prediction_weight
         self.autoencoder = autoencoder_class(**autoencoder_kwargs)
         self._tie_encoder_to_policy()
+        self.autoencoder.to(self.device)
         if pretrained_path and Path(pretrained_path).exists():
             self.load_pretrained_autoencoder(pretrained_path)
         elif pretrained_path:
@@ -392,6 +394,7 @@ class SDAMAlternatingPPO:
         state_dict = checkpoint.get("model_state_dict", checkpoint)
         self.autoencoder.load_state_dict(state_dict, strict=False)
         self._tie_encoder_to_policy()
+        self.autoencoder.to(self.device)
 
     def learn(self, total_timesteps: int, **kwargs):
         if total_timesteps <= 0:
@@ -437,7 +440,7 @@ class SDAMAlternatingPPO:
             batch = atari_observations_to_sdam(
                 observations[indices],
                 self.autoencoder.sequence_length,
-            )
+            ).to(self.device)
             self.auxiliary_optimizer.zero_grad()
             outputs = self.autoencoder(batch)
             outputs["loss"].backward()
