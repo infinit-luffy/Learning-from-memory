@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    import torch
+import torch
 
 
 def atari_observations_to_sdam(
@@ -15,7 +12,9 @@ def atari_observations_to_sdam(
         raise ValueError(f"observations frame stack must be {sequence_length}")
 
     converted = observations.float()
-    if converted.numel() > 0 and converted.max().item() > 1.0:
+    if not observations.dtype.is_floating_point:
+        converted = converted / 255.0
+    elif converted.numel() > 0 and converted.max().item() > 1.0:
         converted = converted / 255.0
 
     return converted.unsqueeze(2)
