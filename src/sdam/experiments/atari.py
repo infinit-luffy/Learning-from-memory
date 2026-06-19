@@ -56,6 +56,16 @@ def _safe_torch_load(path: str | Path, *, map_location: str = "cpu"):
         return torch.load(Path(path), map_location=map_location)
 
 
+def _resolve_device(device: str | torch.device) -> torch.device:
+    if str(device) == "auto":
+        requested = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    else:
+        requested = torch.device(device)
+    if requested.type == "cuda" and not torch.cuda.is_available():
+        raise ValueError("CUDA was requested but torch.cuda.is_available() is false")
+    return requested
+
+
 def build_sdam_atari_policy_kwargs(config: AtariSDAMConfig) -> dict[str, Any]:
     return {
         "features_extractor_class": SDAMAtariFeaturesExtractor,
@@ -213,8 +223,9 @@ def collect_random_atari_sequences(
 
 
 class SDAMAtariPretrainer:
-    def __init__(self, config: AtariSDAMConfig) -> None:
+    def __init__(self, config: AtariSDAMConfig, device: str | torch.device = "auto") -> None:
         self.config = config
+        self.device = _resolve_device(device)
         self.autoencoder = SDAMAtariAutoEncoder(
             sequence_length=config.env.n_stack,
             static_dim=config.model.static_dim,
@@ -223,7 +234,7 @@ class SDAMAtariPretrainer:
             hidden_channels=config.model.hidden_channels,
             reconstruction_weight=config.pretraining.reconstruction_weight,
             prediction_weight=config.pretraining.prediction_weight,
-        )
+        ).to(self.device)
 
     def train(
         self,
@@ -247,7 +258,8 @@ class SDAMAtariPretrainer:
         if logger is not None:
             logger(
                 "[pretrain] start "
-                f"dataset={dataset_path} samples={observations.shape[0]} steps={steps}"
+                f"dataset={dataset_path} samples={observations.shape[0]} "
+                f"steps={steps} device={self.device}"
             )
         optimizer = torch.optim.Adam(
             self.autoencoder.parameters(),
@@ -261,14 +273,16 @@ class SDAMAtariPretrainer:
             batch = atari_observations_to_sdam(
                 observations[indices],
                 self.config.env.n_stack,
-            )
+            ).to(self.device)
             optimizer.zero_grad()
             outputs = self.autoencoder(batch)
             outputs["loss"].backward()
             optimizer.step()
             last_loss = float(outputs["loss"].detach().cpu().item())
             if logger is not None and (
-                step == steps or (log_interval > 0 and step % log_interval == 0)
+                step == 1
+                or step == steps
+                or (log_interval > 0 and step % log_interval == 0)
             ):
                 elapsed = time.monotonic() - started_at
                 logger(
@@ -293,6 +307,7 @@ class SDAMAtariPretrainer:
             "checkpoint_path": str(checkpoint_path),
             "loss": last_loss,
             "train_steps": steps,
+            "device": str(self.device),
         }
 
 

@@ -20,6 +20,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-steps", type=int, default=None)
     parser.add_argument("--dataset-path", type=Path, default=None)
     parser.add_argument("--save-path", type=Path, default=Path("runs/alien/sdam_pretrain"))
+    parser.add_argument("--device", default="auto")
     parser.add_argument("--collect-log-interval", type=int, default=1000)
     parser.add_argument("--train-log-interval", type=int, default=100)
     return parser.parse_args()
@@ -60,7 +61,7 @@ def main() -> None:
         if close is not None:
             close()
 
-    result = SDAMAtariPretrainer(config).train(
+    result = SDAMAtariPretrainer(config, device=args.device).train(
         dataset_path=collected_path,
         save_path=args.save_path,
         train_steps=args.train_steps,

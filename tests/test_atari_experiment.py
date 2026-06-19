@@ -27,6 +27,7 @@ from sdam.experiments.atari import (
     build_sdam_atari_policy_kwargs,
     evaluate_atari_model,
     format_comparison_markdown,
+    _resolve_device,
     _safe_torch_load,
     train_sdam_atari,
 )
@@ -363,7 +364,7 @@ def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):
     dataset_path = tmp_path / "dataset.pt"
     torch.save({"observations": observations}, dataset_path)
 
-    pretrainer = SDAMAtariPretrainer(config)
+    pretrainer = SDAMAtariPretrainer(config, device="cpu")
     logs = []
     result = pretrainer.train(
         dataset_path=dataset_path,
@@ -376,8 +377,33 @@ def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):
     assert result["checkpoint_path"].endswith("sdam_autoencoder.pt")
     assert Path(result["checkpoint_path"]).exists()
     assert result["loss"] >= 0.0
+    assert result["device"] == "cpu"
+    assert any("device=cpu" in message for message in logs)
     assert any("step=1/1" in message for message in logs)
     assert any("saved checkpoint=" in message for message in logs)
+
+
+def test_resolve_device_auto_prefers_cuda_when_available(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: True)
+
+    device = _resolve_device("auto")
+
+    assert device.type == "cuda"
+
+
+def test_resolve_device_auto_falls_back_to_cpu_when_cuda_unavailable(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    device = _resolve_device("auto")
+
+    assert device.type == "cpu"
+
+
+def test_resolve_device_rejects_unavailable_cuda(monkeypatch):
+    monkeypatch.setattr(torch.cuda, "is_available", lambda: False)
+
+    with pytest.raises(ValueError, match="CUDA was requested"):
+        _resolve_device("cuda")
 
 
 def test_safe_torch_load_requests_weights_only(monkeypatch, tmp_path):
@@ -701,6 +727,7 @@ def test_pretrain_atari_script_help_runs():
     assert "--config" in result.stdout
     assert "--steps" in result.stdout
     assert "--train-steps" in result.stdout
+    assert "--device" in result.stdout
     assert "--collect-log-interval" in result.stdout
     assert "--train-log-interval" in result.stdout
     assert "--save-path" in result.stdout
