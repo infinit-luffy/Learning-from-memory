@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import csv
+import time
 import warnings
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import torch
 
@@ -175,6 +176,8 @@ def collect_random_atari_sequences(
     steps: int,
     sequence_length: int,
     output_path: str | Path,
+    log_interval: int = 1000,
+    logger: Callable[[str], None] | None = None,
 ) -> Path:
     if steps <= 0:
         raise ValueError("steps must be positive")
@@ -183,9 +186,12 @@ def collect_random_atari_sequences(
 
     output = Path(output_path)
     output.parent.mkdir(parents=True, exist_ok=True)
+    started_at = time.monotonic()
     observation = _unpack_reset(env.reset())
     samples = []
-    for _ in range(steps):
+    if logger is not None:
+        logger(f"[collect] start steps={steps} output={output}")
+    for step in range(1, steps + 1):
         action = env.action_space.sample()
         if getattr(env, "num_envs", None):
             action = [env.action_space.sample() for _ in range(env.num_envs)]
@@ -193,8 +199,16 @@ def collect_random_atari_sequences(
         samples.append(_first_observation(observation, sequence_length))
         if bool(torch.as_tensor(done).any().item()) and not getattr(env, "num_envs", None):
             observation = _unpack_reset(env.reset())
+        if logger is not None and (
+            step == steps or (log_interval > 0 and step % log_interval == 0)
+        ):
+            elapsed = time.monotonic() - started_at
+            logger(f"[collect] step={step}/{steps} elapsed={elapsed:.1f}s")
 
     torch.save({"observations": torch.stack(samples, dim=0)}, output)
+    if logger is not None:
+        elapsed = time.monotonic() - started_at
+        logger(f"[collect] saved samples={len(samples)} path={output} elapsed={elapsed:.1f}s")
     return output
 
 
@@ -216,6 +230,8 @@ class SDAMAtariPretrainer:
         dataset_path: str | Path,
         save_path: str | Path,
         train_steps: int | None = None,
+        log_interval: int = 100,
+        logger: Callable[[str], None] | None = None,
     ) -> dict[str, str | float | int]:
         steps = train_steps if train_steps is not None else self.config.pretraining.train_steps
         if steps <= 0:
@@ -228,13 +244,19 @@ class SDAMAtariPretrainer:
         if observations.shape[1] != self.config.env.n_stack:
             raise ValueError(f"dataset frame stack must be {self.config.env.n_stack}")
 
+        if logger is not None:
+            logger(
+                "[pretrain] start "
+                f"dataset={dataset_path} samples={observations.shape[0]} steps={steps}"
+            )
         optimizer = torch.optim.Adam(
             self.autoencoder.parameters(),
             lr=self.config.pretraining.learning_rate,
         )
         batch_size = min(self.config.pretraining.batch_size, observations.shape[0])
         last_loss = 0.0
-        for _ in range(steps):
+        started_at = time.monotonic()
+        for step in range(1, steps + 1):
             indices = torch.randint(0, observations.shape[0], (batch_size,))
             batch = atari_observations_to_sdam(
                 observations[indices],
@@ -245,6 +267,14 @@ class SDAMAtariPretrainer:
             outputs["loss"].backward()
             optimizer.step()
             last_loss = float(outputs["loss"].detach().cpu().item())
+            if logger is not None and (
+                step == steps or (log_interval > 0 and step % log_interval == 0)
+            ):
+                elapsed = time.monotonic() - started_at
+                logger(
+                    f"[pretrain] step={step}/{steps} loss={last_loss:.6f} "
+                    f"elapsed={elapsed:.1f}s"
+                )
 
         output_dir = Path(save_path)
         output_dir.mkdir(parents=True, exist_ok=True)
@@ -257,6 +287,8 @@ class SDAMAtariPretrainer:
             },
             checkpoint_path,
         )
+        if logger is not None:
+            logger(f"[pretrain] saved checkpoint={checkpoint_path}")
         return {
             "checkpoint_path": str(checkpoint_path),
             "loss": last_loss,

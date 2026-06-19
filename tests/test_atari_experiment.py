@@ -302,18 +302,23 @@ def test_collect_random_atari_sequences_samples_expected_shape(tmp_path):
             return observation, 0.0, False, {}
 
     output_path = tmp_path / "random_sequences.pt"
+    logs = []
 
     dataset_path = collect_random_atari_sequences(
         FakeEnv(),
         steps=5,
         sequence_length=4,
         output_path=output_path,
+        log_interval=2,
+        logger=logs.append,
     )
 
     assert dataset_path == output_path
     payload = torch.load(output_path)
     assert payload["observations"].shape == (5, 4, 84, 84)
     assert payload["observations"].dtype == torch.uint8
+    assert any("step=2/5" in message for message in logs)
+    assert any("saved samples=5" in message for message in logs)
 
 
 def test_collect_random_atari_sequences_accepts_channel_last_vec_stack(tmp_path):
@@ -359,15 +364,20 @@ def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):
     torch.save({"observations": observations}, dataset_path)
 
     pretrainer = SDAMAtariPretrainer(config)
+    logs = []
     result = pretrainer.train(
         dataset_path=dataset_path,
         save_path=tmp_path / "pretrain",
         train_steps=1,
+        log_interval=1,
+        logger=logs.append,
     )
 
     assert result["checkpoint_path"].endswith("sdam_autoencoder.pt")
     assert Path(result["checkpoint_path"]).exists()
     assert result["loss"] >= 0.0
+    assert any("step=1/1" in message for message in logs)
+    assert any("saved checkpoint=" in message for message in logs)
 
 
 def test_safe_torch_load_requests_weights_only(monkeypatch, tmp_path):
@@ -691,4 +701,6 @@ def test_pretrain_atari_script_help_runs():
     assert "--config" in result.stdout
     assert "--steps" in result.stdout
     assert "--train-steps" in result.stdout
+    assert "--collect-log-interval" in result.stdout
+    assert "--train-log-interval" in result.stdout
     assert "--save-path" in result.stdout
