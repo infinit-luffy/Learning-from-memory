@@ -78,15 +78,18 @@ def train_sdam_atari(
     save_path: str | Path | None = None,
     verbose: int = 1,
 ):
+    steps = (
+        total_timesteps
+        if total_timesteps is not None
+        else config.training.total_timesteps
+    )
+    if steps <= 0:
+        raise ValueError("total_timesteps must be positive")
+
     env = None
     try:
         env = build_atari_env(config)
         model = build_sdam_atari_model(config, env, verbose=verbose)
-        steps = (
-            total_timesteps
-            if total_timesteps is not None
-            else config.training.total_timesteps
-        )
         output_path = Path(save_path if save_path is not None else config.training.save_path)
         output_path.parent.mkdir(parents=True, exist_ok=True)
         model.learn(total_timesteps=steps)

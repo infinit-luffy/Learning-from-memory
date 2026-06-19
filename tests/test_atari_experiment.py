@@ -245,6 +245,97 @@ def test_train_sdam_atari_closes_env_and_saves_model(monkeypatch, tmp_path):
     assert fake_env.closed
 
 
+def test_train_sdam_atari_rejects_non_positive_timesteps_before_building_env(
+    monkeypatch,
+    tmp_path,
+):
+    config = load_atari_config(CONFIG_PATH)
+    env_built = False
+
+    import sdam.experiments.atari as atari
+
+    def fake_build_atari_env(received_config):
+        nonlocal env_built
+        env_built = True
+        return object()
+
+    monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
+
+    with pytest.raises(ValueError, match="total_timesteps must be positive"):
+        train_sdam_atari(
+            config,
+            total_timesteps=0,
+            save_path=tmp_path / "model",
+        )
+
+    assert not env_built
+
+
+def test_train_sdam_atari_closes_env_when_model_construction_raises(monkeypatch):
+    config = load_atari_config(CONFIG_PATH)
+
+    class FakeEnv:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    fake_env = FakeEnv()
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "build_atari_env", lambda received_config: fake_env)
+
+    def fake_build_sdam_atari_model(received_config, env, *, verbose):
+        raise RuntimeError("model construction failed")
+
+    monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
+
+    with pytest.raises(RuntimeError, match="model construction failed"):
+        train_sdam_atari(config)
+
+    assert fake_env.closed
+
+
+def test_train_sdam_atari_closes_env_when_learn_raises(monkeypatch, tmp_path):
+    config = load_atari_config(CONFIG_PATH)
+
+    class FakeEnv:
+        def __init__(self):
+            self.closed = False
+
+        def close(self):
+            self.closed = True
+
+    class FakeModel:
+        def learn(self, *, total_timesteps):
+            raise RuntimeError("learn failed")
+
+        def save(self, path):
+            raise AssertionError("save should not run after learn failure")
+
+    fake_env = FakeEnv()
+
+    import sdam.experiments.atari as atari
+
+    monkeypatch.setattr(atari, "build_atari_env", lambda received_config: fake_env)
+    monkeypatch.setattr(
+        atari,
+        "build_sdam_atari_model",
+        lambda received_config, env, *, verbose: FakeModel(),
+    )
+
+    with pytest.raises(RuntimeError, match="learn failed"):
+        train_sdam_atari(
+            config,
+            total_timesteps=12,
+            save_path=tmp_path / "model",
+        )
+
+    assert fake_env.closed
+
+
 def test_train_atari_script_help_runs():
     result = subprocess.run(
         [sys.executable, "scripts/train_atari_sdam.py", "--help"],
