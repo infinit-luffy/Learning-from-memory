@@ -27,6 +27,7 @@ from sdam.experiments.atari import (
     build_sdam_atari_policy_kwargs,
     evaluate_atari_model,
     format_comparison_markdown,
+    _safe_torch_load,
     train_sdam_atari,
 )
 from sdam.policies.sb3_atari import SDAMAtariAutoEncoder, SDAMAtariFeaturesExtractor
@@ -367,6 +368,24 @@ def test_sdam_atari_pretrainer_saves_checkpoint(tmp_path):
     assert result["checkpoint_path"].endswith("sdam_autoencoder.pt")
     assert Path(result["checkpoint_path"]).exists()
     assert result["loss"] >= 0.0
+
+
+def test_safe_torch_load_requests_weights_only(monkeypatch, tmp_path):
+    calls = {}
+
+    def fake_load(path, *, map_location, weights_only):
+        calls["path"] = path
+        calls["map_location"] = map_location
+        calls["weights_only"] = weights_only
+        return {"observations": torch.zeros(1, 4, 84, 84)}
+
+    monkeypatch.setattr(torch, "load", fake_load)
+
+    payload = _safe_torch_load(tmp_path / "dataset.pt", map_location="cpu")
+
+    assert payload["observations"].shape == (1, 4, 84, 84)
+    assert calls["map_location"] == "cpu"
+    assert calls["weights_only"] is True
 
 
 def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternating(

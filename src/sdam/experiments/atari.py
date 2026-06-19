@@ -48,6 +48,13 @@ def _load_evaluate_policy():
     return evaluate_policy
 
 
+def _safe_torch_load(path: str | Path, *, map_location: str = "cpu"):
+    try:
+        return torch.load(Path(path), map_location=map_location, weights_only=True)
+    except TypeError:
+        return torch.load(Path(path), map_location=map_location)
+
+
 def build_sdam_atari_policy_kwargs(config: AtariSDAMConfig) -> dict[str, Any]:
     return {
         "features_extractor_class": SDAMAtariFeaturesExtractor,
@@ -214,7 +221,7 @@ class SDAMAtariPretrainer:
         if steps <= 0:
             raise ValueError("train_steps must be positive")
 
-        payload = torch.load(Path(dataset_path), map_location="cpu")
+        payload = _safe_torch_load(dataset_path, map_location="cpu")
         observations = payload["observations"]
         if observations.ndim != 4:
             raise ValueError("dataset observations must have shape [N, T, 84, 84]")
@@ -315,7 +322,7 @@ class SDAMAlternatingPPO:
             self.autoencoder.encoder = encoder
 
     def load_pretrained_autoencoder(self, checkpoint_path: str | Path) -> None:
-        checkpoint = torch.load(Path(checkpoint_path), map_location="cpu")
+        checkpoint = _safe_torch_load(checkpoint_path, map_location="cpu")
         state_dict = checkpoint.get("model_state_dict", checkpoint)
         self.autoencoder.load_state_dict(state_dict, strict=False)
         self._tie_encoder_to_policy()
