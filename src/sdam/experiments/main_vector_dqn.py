@@ -41,13 +41,13 @@ def _load_ppo():
 
 def _load_vec_env_tools():
     try:
-        from stable_baselines3.common.atari_wrappers import AtariWrapper
+        from stable_baselines3.common.env_util import make_atari_env
         from stable_baselines3.common.evaluation import evaluate_policy
-        from stable_baselines3.common.vec_env import DummyVecEnv
+        from stable_baselines3.common.vec_env import VecEnvWrapper
     except ImportError as exc:
         raise ImportError(_SB3_EXTRA_MESSAGE) from exc
 
-    return AtariWrapper, DummyVecEnv, evaluate_policy
+    return make_atari_env, VecEnvWrapper, evaluate_policy
 
 
 def _load_gymnasium():
@@ -455,6 +455,11 @@ def _frame_to_tensor(observation: Any) -> torch.Tensor:
     tensor = torch.as_tensor(observation, dtype=torch.float32).detach().cpu()
     while tensor.ndim > 3 and tensor.shape[0] == 1:
         tensor = tensor.squeeze(0)
+    if tensor.ndim == 3:
+        if tensor.shape[-1] in (1, 4):
+            tensor = tensor[..., -1]
+        elif tensor.shape[0] in (1, 4):
+            tensor = tensor[-1]
     tensor = tensor.squeeze()
     if tensor.ndim != 2:
         raise ValueError(f"expected Atari grayscale frame with shape [84, 84], got {tuple(tensor.shape)}")
@@ -604,20 +609,16 @@ def train_main_env_model_from_dataset(
 
 
 def build_main_env_model_collection_env(config: AtariSDAMConfig):
-    gym, _ = _load_gymnasium()
-    AtariWrapper, DummyVecEnv, _ = _load_vec_env_tools()
-
-    def _init():
-        env = _make_gym_atari_env(gym, config.env.env_id)
-        env = AtariWrapper(
-            env,
-            terminal_on_life_loss=config.env.terminal_on_life_loss,
-            clip_reward=True,
-        )
-        env.reset(seed=config.env.seed)
-        return env
-
-    return DummyVecEnv([_init])
+    make_atari_env, _, _ = _load_vec_env_tools()
+    return make_atari_env(
+        config.env.env_id,
+        n_envs=1,
+        seed=config.env.seed,
+        wrapper_kwargs={
+            "terminal_on_life_loss": config.env.terminal_on_life_loss,
+            "clip_reward": True,
+        },
+    )
 
 
 def pretrain_main_vae(
@@ -922,18 +923,15 @@ class MainVectorObservationWrapper:
                 return super().reset(**kwargs)
 
             def observation(self, frame):
-                frame_tensor = torch.as_tensor(frame, dtype=torch.float32)
-                frame_tensor = frame_tensor.squeeze()
-                if frame_tensor.max().item() > 1.0:
-                    frame_tensor = frame_tensor / 255.0
+                frame_tensor = _frame_to_tensor(frame)
                 with torch.no_grad():
                     if self.state_background is None:
-                        vae_input = frame_tensor.unsqueeze(0).to(self.device)
+                        vae_input = frame_tensor.to(self.device)
                         self.state_background = self.vae.generate(vae_input).cpu()
-                        mu, log_var = self.vae.encode(vae_input.unsqueeze(0))
+                        mu, log_var = self.vae.encode(vae_input.unsqueeze(1))
                         self.state_background_latent = self.vae.reparameterize(mu, log_var).cpu()
-                    residual = frame_tensor.cpu() - self.state_background.squeeze(0).squeeze(0)
-                    binary = (residual > 0.1).float().unsqueeze(0).unsqueeze(0).to(self.device)
+                    residual = frame_tensor.cpu() - self.state_background.squeeze(0)
+                    binary = (residual > 0.1).float().unsqueeze(0).to(self.device)
                     feature = self.env_model.get_feature_encode(binary)[0].detach().cpu().numpy()
                     self.feature_deque.append(feature.astype(np.float32))
                 dynamic = np.stack(self.feature_deque, axis=0).astype(np.float32).reshape(-1)
@@ -941,6 +939,89 @@ class MainVectorObservationWrapper:
                 return np.concatenate([dynamic, background], axis=0).astype(np.float32)
 
         self.wrapper = _Wrapper(env)
+
+    def unwrap(self):
+        return self.wrapper
+
+
+class MainVectorVecEnvWrapper:
+    """SB3 VecEnv wrapper: Atari frame observations -> 160-D frozen memory vectors."""
+
+    def __init__(self, venv, vae: MainVanillaVAE, env_model: MainEnvModelV2, device: torch.device) -> None:
+        _, VecEnvWrapper, _ = _load_vec_env_tools()
+        _, spaces = _load_gymnasium()
+        vae.eval()
+        env_model.eval()
+        outer = self
+
+        class _Wrapper(VecEnvWrapper):
+            def __init__(self, wrapped_venv):
+                super().__init__(
+                    wrapped_venv,
+                    observation_space=spaces.Box(low=-10, high=10, shape=(160,), dtype=np.float32),
+                )
+                self.vae = vae
+                self.env_model = env_model
+                self.device = device
+                self.state_backgrounds = [None for _ in range(self.num_envs)]
+                self.state_background_latents = [None for _ in range(self.num_envs)]
+                self.feature_deques = [
+                    deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
+                    for _ in range(self.num_envs)
+                ]
+
+            def reset(self):
+                self.state_backgrounds = [None for _ in range(self.num_envs)]
+                self.state_background_latents = [None for _ in range(self.num_envs)]
+                self.feature_deques = [
+                    deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
+                    for _ in range(self.num_envs)
+                ]
+                return self._transform(self.venv.reset())
+
+            def step_wait(self):
+                observations, rewards, dones, infos = self.venv.step_wait()
+                for index, done in enumerate(dones):
+                    if done:
+                        self.state_backgrounds[index] = None
+                        self.state_background_latents[index] = None
+                        self.feature_deques[index] = deque(
+                            [np.zeros(32, dtype=np.float32) for _ in range(4)],
+                            maxlen=4,
+                        )
+                return self._transform(observations), rewards, dones, infos
+
+            def _transform(self, observations):
+                return np.stack(
+                    [self._transform_one(observations[index], index) for index in range(self.num_envs)],
+                    axis=0,
+                ).astype(np.float32)
+
+            def _transform_one(self, frame, index: int) -> np.ndarray:
+                frame_tensor = _frame_to_tensor(frame)
+                with torch.no_grad():
+                    if self.state_backgrounds[index] is None:
+                        vae_input = frame_tensor.to(self.device)
+                        self.state_backgrounds[index] = self.vae.generate(vae_input).cpu()
+                        mu, log_var = self.vae.encode(vae_input.unsqueeze(1))
+                        self.state_background_latents[index] = self.vae.reparameterize(mu, log_var).cpu()
+                    residual = frame_tensor.cpu() - self.state_backgrounds[index].squeeze(0)
+                    binary = (residual > 0.1).float().unsqueeze(0).to(self.device)
+                    feature = self.env_model.get_feature_encode(binary)[0].detach().cpu().numpy()
+                    self.feature_deques[index].append(feature.astype(np.float32))
+                dynamic = np.stack(self.feature_deques[index], axis=0).astype(np.float32).reshape(-1)
+                background = (
+                    self.state_background_latents[index]
+                    .detach()
+                    .cpu()
+                    .numpy()
+                    .squeeze()
+                    .astype(np.float32)
+                )
+                return np.concatenate([dynamic, background], axis=0).astype(np.float32)
+
+        self.wrapper = _Wrapper(venv)
+        outer.wrapper = self.wrapper
 
     def unwrap(self):
         return self.wrapper
@@ -967,24 +1048,17 @@ def build_main_vector_env(
     env_model: MainEnvModelV2,
     device: torch.device,
 ):
-    gym, _ = _load_gymnasium()
-    AtariWrapper, DummyVecEnv, _ = _load_vec_env_tools()
-
-    def make_env(rank: int):
-        def _init():
-            env = _make_gym_atari_env(gym, config.env.env_id)
-            env = AtariWrapper(
-                env,
-                terminal_on_life_loss=config.env.terminal_on_life_loss,
-                clip_reward=True,
-            )
-            env = MainVectorObservationWrapper(env, vae, env_model, device).unwrap()
-            env.reset(seed=config.env.seed + rank)
-            return env
-
-        return _init
-
-    return DummyVecEnv([make_env(rank) for rank in range(config.env.n_envs)])
+    make_atari_env, _, _ = _load_vec_env_tools()
+    env = make_atari_env(
+        config.env.env_id,
+        n_envs=config.env.n_envs,
+        seed=config.env.seed,
+        wrapper_kwargs={
+            "terminal_on_life_loss": config.env.terminal_on_life_loss,
+            "clip_reward": True,
+        },
+    )
+    return MainVectorVecEnvWrapper(env, vae, env_model, device).unwrap()
 
 
 def train_main_vector_dqn(
