@@ -991,14 +991,23 @@ class MainVectorVecEnvWrapper:
             def step_wait(self):
                 observations, rewards, dones, infos = self.venv.step_wait()
                 for index, done in enumerate(dones):
-                    if done:
-                        self.state_backgrounds[index] = None
-                        self.state_background_latents[index] = None
-                        self.feature_deques[index] = deque(
-                            [np.zeros(32, dtype=np.float32) for _ in range(4)],
-                            maxlen=4,
+                    if done and "terminal_observation" in infos[index]:
+                        infos[index] = dict(infos[index])
+                        infos[index]["terminal_observation"] = self._transform_one(
+                            infos[index]["terminal_observation"],
+                            index,
                         )
+                    if done:
+                        self._reset_memory(index)
                 return self._transform(observations), rewards, dones, infos
+
+            def _reset_memory(self, index: int) -> None:
+                self.state_backgrounds[index] = None
+                self.state_background_latents[index] = None
+                self.feature_deques[index] = deque(
+                    [np.zeros(32, dtype=np.float32) for _ in range(4)],
+                    maxlen=4,
+                )
 
             def _transform(self, observations):
                 return np.stack(
