@@ -119,32 +119,23 @@ The comparison script writes:
 - `runs/atari/compare_smoke/naturecnn.zip`
 - `runs/atari/compare_smoke/sdam.zip`
 
-Pretrain the main-branch-style Alien environment model. This step assumes
-`vae_Alien.pth` already exists:
+Run the full main-branch-style Alien pipeline. This trains the VAE, trains
+`ENV_MODEL_V2`, then trains the vector-state RL agent:
 
 ```bash
-python scripts/pretrain_main_env_model.py \
+python scripts/run_main_atari_pipeline.py \
   --config configs/atari/alien_sdam_ppo.yaml \
-  --vae-path vae_Alien.pth \
-  --save-path env_Alien.pth \
-  --episodes 1000 \
-  --train-steps 100 \
-  --batch-size 128 \
+  --output-dir runs/alien/full_pipeline \
+  --vae-episodes 2000 \
+  --vae-train-steps 300 \
+  --env-episodes 2000 \
+  --env-train-steps 300 \
+  --rl-algo dqn \
+  --timesteps 5000000 \
+  --eval-episodes 20 \
   --device cuda \
-  --dataset-path runs/alien/main_env_model_dataset.pt
-```
-
-Then run the main-branch-style Alien experiment:
-
-```bash
-python scripts/train_main_vector_dqn.py \
-  --config configs/atari/alien_sdam_ppo.yaml \
-  --vae-path vae_Alien.pth \
-  --env-model-path env_Alien.pth \
-  --timesteps 1000000 \
-  --eval-episodes 10 \
-  --device cuda \
-  --output-dir runs/alien/main_vector_dqn_1m
+  --collect-log-interval 10 \
+  --train-log-interval 100
 ```
 
 This matches the stronger route from `main`: the pretrained VAE/background
@@ -154,16 +145,29 @@ model and transition model are frozen, each Atari frame is converted to a
 
 The output directory contains:
 
-- `runs/alien/main_vector_dqn_1m/comparison.csv`
-- `runs/alien/main_vector_dqn_1m/main_vector_dqn.zip`
+- `runs/alien/full_pipeline/vae_frames.pt`
+- `runs/alien/full_pipeline/vae_Alien.pth`
+- `runs/alien/full_pipeline/env_model_dataset.pt`
+- `runs/alien/full_pipeline/env_Alien.pth`
+- `runs/alien/full_pipeline/rl/comparison.csv`
+- `runs/alien/full_pipeline/rl/main_vector_dqn.zip`
 
-For a longer Alien run, use the same command with more timesteps:
+For debugging individual stages, you can still run the environment model
+pretraining or vector DQN training separately:
 
 ```bash
+python scripts/pretrain_main_env_model.py \
+  --config configs/atari/alien_sdam_ppo.yaml \
+  --vae-path runs/alien/full_pipeline/vae_Alien.pth \
+  --save-path runs/alien/full_pipeline/env_Alien.pth \
+  --episodes 2000 \
+  --train-steps 300 \
+  --device cuda
+
 python scripts/train_main_vector_dqn.py \
   --config configs/atari/alien_sdam_ppo.yaml \
-  --vae-path vae_Alien.pth \
-  --env-model-path env_Alien.pth \
+  --vae-path runs/alien/full_pipeline/vae_Alien.pth \
+  --env-model-path runs/alien/full_pipeline/env_Alien.pth \
   --timesteps 5000000 \
   --eval-episodes 20 \
   --device cuda \

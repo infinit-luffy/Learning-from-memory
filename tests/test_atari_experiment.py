@@ -34,6 +34,7 @@ from sdam.experiments.main_vector_dqn import (
     MainEnvModelV2,
     MainVectorObservationWrapper,
     collect_main_env_model_dataset,
+    train_main_vae_from_frames,
     train_main_env_model_from_dataset,
 )
 from sdam.policies.sb3_atari import SDAMAtariAutoEncoder, SDAMAtariFeaturesExtractor
@@ -227,6 +228,25 @@ def test_main_vector_env_model_keeps_origin_main_checkpoint_keys():
     assert "connection_recog.atten.attn.weight" in state_dict
     assert "connection_recog.atten.attn.bias" in state_dict
     assert "feature_recog.fc_mu.weight" in state_dict
+
+
+def test_train_main_vae_from_frames_saves_checkpoint(tmp_path):
+    frames = torch.rand(2, 84, 84)
+    save_path = tmp_path / "vae_Alien.pth"
+
+    result = train_main_vae_from_frames(
+        frames,
+        save_path=save_path,
+        train_steps=1,
+        batch_size=1,
+        learning_rate=1e-4,
+        device="cpu",
+    )
+
+    assert save_path.exists()
+    assert result["checkpoint_path"] == str(save_path)
+    assert result["train_steps"] == 1
+    assert result["loss"] >= 0.0
 
 
 def test_collect_main_env_model_dataset_matches_origin_main_shapes():
@@ -894,3 +914,21 @@ def test_pretrain_main_env_model_script_help_runs():
     assert "--episodes" in result.stdout
     assert "--train-steps" in result.stdout
     assert "--device" in result.stdout
+
+
+def test_run_main_atari_pipeline_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/run_main_atari_pipeline.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--output-dir" in result.stdout
+    assert "--vae-episodes" in result.stdout
+    assert "--vae-train-steps" in result.stdout
+    assert "--env-episodes" in result.stdout
+    assert "--env-train-steps" in result.stdout
+    assert "--rl-algo" in result.stdout
+    assert "dqn" in result.stdout
+    assert "ppo" in result.stdout

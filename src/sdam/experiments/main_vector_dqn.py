@@ -30,6 +30,15 @@ def _load_dqn():
     return DQN
 
 
+def _load_ppo():
+    try:
+        from stable_baselines3 import PPO
+    except ImportError as exc:
+        raise ImportError(_SB3_EXTRA_MESSAGE) from exc
+
+    return PPO
+
+
 def _load_vec_env_tools():
     try:
         from stable_baselines3.common.atari_wrappers import AtariWrapper
@@ -145,6 +154,19 @@ class MainVanillaVAE(nn.Module):
         mu, log_var = self.encode(input_tensor)
         z = self.reparameterize(mu, log_var)
         return [self.decode(z), input_tensor, mu, log_var]
+
+    def loss_function(self, recons: torch.Tensor, input_tensor: torch.Tensor, mu: torch.Tensor, log_var: torch.Tensor):
+        recons_loss = F.mse_loss(recons, input_tensor)
+        kld_loss = torch.mean(
+            -0.5 * torch.sum(1 + log_var - mu.pow(2) - log_var.exp(), dim=1),
+            dim=0,
+        )
+        loss = recons_loss + 0.5 * kld_loss
+        return {
+            "loss": loss,
+            "Reconstruction_Loss": recons_loss,
+            "KLD": -kld_loss,
+        }
 
     def generate(self, input_tensor: torch.Tensor) -> torch.Tensor:
         return self.forward(input_tensor)[0]
@@ -292,6 +314,94 @@ def load_main_vae(
     return vae, resolved_device
 
 
+def collect_main_vae_frames(
+    env,
+    episodes: int,
+    log_interval: int = 10,
+    logger: Any | None = None,
+) -> torch.Tensor:
+    if episodes <= 0:
+        raise ValueError("episodes must be positive")
+    frames: list[torch.Tensor] = []
+    for episode in range(episodes):
+        _unpack_reset(env.reset())
+        done = False
+        while not done:
+            if getattr(env, "num_envs", None):
+                action = np.array([env.action_space.sample() for _ in range(int(env.num_envs))])
+            else:
+                action = env.action_space.sample()
+            observation, _, done, _ = _unpack_step(env.step(action))
+            done = _first_done(done)
+            frames.append(_frame_to_tensor(observation).squeeze(0))
+        if logger is not None and log_interval > 0 and (episode + 1) % log_interval == 0:
+            logger(f"[vae collect] episode={episode + 1}/{episodes} frames={len(frames)}")
+    if not frames:
+        raise ValueError("collection produced no frames")
+    output = torch.stack(frames).float()
+    if logger is not None:
+        logger(f"[vae collect] saved frames={len(frames)}")
+    return output
+
+
+def train_main_vae_from_frames(
+    frames: torch.Tensor,
+    save_path: str | Path,
+    train_steps: int = 300,
+    batch_size: int = 128,
+    learning_rate: float = 1e-3,
+    device: str | torch.device = "auto",
+    log_interval: int = 100,
+    logger: Any | None = None,
+) -> dict[str, str | int | float]:
+    if train_steps <= 0:
+        raise ValueError("train_steps must be positive")
+    if batch_size <= 0:
+        raise ValueError("batch_size must be positive")
+    if frames.ndim == 4 and frames.shape[1] == 1:
+        frames = frames.squeeze(1)
+    if frames.ndim != 3:
+        raise ValueError(f"expected frames with shape [N,84,84], got {tuple(frames.shape)}")
+
+    resolved_device = _resolve_device(device)
+    vae = MainVanillaVAE(in_channels=1, latent_dim=32).to(resolved_device)
+    loader = DataLoader(TensorDataset(frames.float().clamp(0.0, 1.0)), batch_size=batch_size, shuffle=True)
+    optimizer = torch.optim.Adam(vae.parameters(), lr=learning_rate)
+    last_loss = 0.0
+    global_step = 0
+    vae.train()
+    for _ in range(train_steps):
+        for (batch,) in loader:
+            batch = batch.to(resolved_device)
+            outputs = vae(batch)
+            losses = vae.loss_function(*outputs)
+            loss = losses["loss"]
+            optimizer.zero_grad()
+            loss.backward()
+            optimizer.step()
+            last_loss = float(loss.detach().cpu().item())
+            global_step += 1
+            if logger is not None and log_interval > 0 and global_step % log_interval == 0:
+                logger(
+                    "[vae train] "
+                    f"step={global_step} loss={last_loss:.6f} "
+                    f"recon={float(losses['Reconstruction_Loss'].detach().cpu().item()):.6f}"
+                )
+
+    output_path = Path(save_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    torch.save(vae.state_dict(), output_path)
+    if logger is not None:
+        logger(f"[vae train] saved checkpoint={output_path}")
+    return {
+        "checkpoint_path": str(output_path),
+        "loss": last_loss,
+        "train_steps": train_steps,
+        "updates": global_step,
+        "device": str(resolved_device),
+    }
+
+
 def _frame_to_tensor(observation: Any) -> torch.Tensor:
     tensor = torch.as_tensor(observation, dtype=torch.float32).detach().cpu()
     while tensor.ndim > 3 and tensor.shape[0] == 1:
@@ -308,6 +418,10 @@ def _resize_background(background: torch.Tensor) -> torch.Tensor:
     if background.ndim == 3:
         background = background.unsqueeze(1)
     return F.interpolate(background, size=(60, 45), mode="bilinear", align_corners=False)
+
+
+def _first_done(done: Any) -> bool:
+    return bool(torch.as_tensor(done).flatten()[0].item())
 
 
 def collect_main_env_model_dataset(
@@ -338,6 +452,7 @@ def collect_main_env_model_dataset(
                 else:
                     action = env.action_space.sample()
                 observation, _, done, _ = _unpack_step(env.step(action))
+                done = _first_done(done)
                 frame = _frame_to_tensor(observation)
                 frame_input = frame.to(resolved_device)
                 background = vae.generate(frame_input)
@@ -368,7 +483,7 @@ def collect_main_env_model_dataset(
 def train_main_env_model_from_dataset(
     dataset: dict[str, torch.Tensor],
     save_path: str | Path,
-    train_steps: int = 100,
+    train_steps: int = 300,
     batch_size: int = 128,
     learning_rate: float = 3e-4,
     device: str | torch.device = "auto",
@@ -456,12 +571,58 @@ def build_main_env_model_collection_env(config: AtariSDAMConfig):
     return DummyVecEnv([_init])
 
 
+def pretrain_main_vae(
+    config: AtariSDAMConfig,
+    save_path: str | Path,
+    episodes: int = 2000,
+    train_steps: int = 300,
+    batch_size: int = 128,
+    learning_rate: float = 1e-3,
+    device: str = "auto",
+    dataset_path: str | Path | None = None,
+    collect_log_interval: int = 10,
+    train_log_interval: int = 100,
+    logger: Any | None = None,
+) -> dict[str, str | int | float]:
+    env = None
+    try:
+        env = build_main_env_model_collection_env(config)
+        frames = collect_main_vae_frames(
+            env,
+            episodes=episodes,
+            log_interval=collect_log_interval,
+            logger=logger,
+        )
+    finally:
+        close = getattr(env, "close", None)
+        if close is not None:
+            close()
+
+    if dataset_path is not None:
+        dataset_output = Path(dataset_path)
+        dataset_output.parent.mkdir(parents=True, exist_ok=True)
+        torch.save({"frames": frames}, dataset_output)
+        if logger is not None:
+            logger(f"[vae collect] dataset_path={dataset_output}")
+
+    return train_main_vae_from_frames(
+        frames,
+        save_path=save_path,
+        train_steps=train_steps,
+        batch_size=batch_size,
+        learning_rate=learning_rate,
+        device=device,
+        log_interval=train_log_interval,
+        logger=logger,
+    )
+
+
 def pretrain_main_env_model(
     config: AtariSDAMConfig,
     vae_path: str | Path,
     save_path: str | Path,
-    episodes: int = 1000,
-    train_steps: int = 100,
+    episodes: int = 2000,
+    train_steps: int = 300,
     batch_size: int = 128,
     learning_rate: float = 3e-4,
     device: str = "auto",
@@ -504,6 +665,183 @@ def pretrain_main_env_model(
         log_interval=train_log_interval,
         logger=logger,
     )
+
+
+def train_main_vector_rl(
+    config: AtariSDAMConfig,
+    vae_path: str | Path,
+    env_model_path: str | Path,
+    rl_algo: str = "dqn",
+    total_timesteps: int | None = None,
+    save_path: str | Path | None = None,
+    eval_episodes: int = 10,
+    output_dir: str | Path | None = None,
+    device: str = "auto",
+    verbose: int = 1,
+    batch_size: int = 256,
+    buffer_size: int = 500000,
+    learning_rate: float = 1e-4,
+) -> dict[str, str | float | int]:
+    if rl_algo not in {"dqn", "ppo"}:
+        raise ValueError("rl_algo must be 'dqn' or 'ppo'")
+    if eval_episodes <= 0:
+        raise ValueError("eval_episodes must be positive")
+    steps = total_timesteps if total_timesteps is not None else config.training.total_timesteps
+    if steps <= 0:
+        raise ValueError("total_timesteps must be positive")
+
+    vae, env_model, resolved_device = load_main_vector_models(vae_path, env_model_path, device)
+    env = None
+    method = f"main_vector_{rl_algo}"
+    try:
+        env = build_main_vector_env(config, vae, env_model, resolved_device)
+        if rl_algo == "dqn":
+            Algo = _load_dqn()
+            model = Algo(
+                "MlpPolicy",
+                env,
+                verbose=verbose,
+                batch_size=batch_size,
+                buffer_size=buffer_size,
+                learning_rate=learning_rate,
+                device=str(resolved_device),
+            )
+        else:
+            Algo = _load_ppo()
+            model = Algo(
+                "MlpPolicy",
+                env,
+                verbose=verbose,
+                learning_rate=config.ppo.learning_rate,
+                n_steps=config.ppo.n_steps,
+                batch_size=config.ppo.batch_size,
+                gamma=config.ppo.gamma,
+                gae_lambda=config.ppo.gae_lambda,
+                clip_range=config.ppo.clip_range,
+                device=str(resolved_device),
+            )
+        model.learn(total_timesteps=steps)
+        output_path = Path(output_dir) if output_dir is not None else Path(f"runs/alien/{method}")
+        output_path.mkdir(parents=True, exist_ok=True)
+        model_path = Path(save_path) if save_path is not None else output_path / f"{method}.zip"
+        model_path.parent.mkdir(parents=True, exist_ok=True)
+        model.save(model_path)
+        _, _, evaluate_policy = _load_vec_env_tools()
+        rewards, lengths = evaluate_policy(
+            model,
+            env,
+            n_eval_episodes=eval_episodes,
+            deterministic=True,
+            return_episode_rewards=True,
+        )
+        mean_reward = float(sum(rewards) / len(rewards))
+        mean_length = float(sum(lengths) / len(lengths))
+        std_reward = float((sum((reward - mean_reward) ** 2 for reward in rewards) / len(rewards)) ** 0.5)
+        row = {
+            "method": method,
+            "mean_reward": mean_reward,
+            "std_reward": std_reward,
+            "mean_ep_length": mean_length,
+            "episodes": len(rewards),
+            "model_path": str(model_path),
+        }
+        with (output_path / "comparison.csv").open("w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(row))
+            writer.writeheader()
+            writer.writerow(row)
+        return row
+    finally:
+        close = getattr(env, "close", None)
+        if close is not None:
+            close()
+
+
+def run_main_atari_pipeline(
+    config: AtariSDAMConfig,
+    output_dir: str | Path,
+    vae_episodes: int = 2000,
+    vae_train_steps: int = 300,
+    env_episodes: int = 2000,
+    env_train_steps: int = 300,
+    rl_algo: str = "dqn",
+    total_timesteps: int = 5000000,
+    eval_episodes: int = 20,
+    device: str = "auto",
+    vae_batch_size: int = 128,
+    env_batch_size: int = 128,
+    vae_learning_rate: float = 1e-3,
+    env_learning_rate: float = 3e-4,
+    rl_learning_rate: float = 1e-4,
+    rl_batch_size: int = 256,
+    rl_buffer_size: int = 500000,
+    verbose: int = 1,
+    collect_log_interval: int = 10,
+    train_log_interval: int = 100,
+    logger: Any | None = None,
+) -> dict[str, Any]:
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    vae_path = output_path / "vae_Alien.pth"
+    vae_dataset_path = output_path / "vae_frames.pt"
+    env_model_path = output_path / "env_Alien.pth"
+    env_dataset_path = output_path / "env_model_dataset.pt"
+    rl_output_path = output_path / "rl"
+
+    if logger is not None:
+        logger("[pipeline] stage=vae")
+    vae_result = pretrain_main_vae(
+        config,
+        save_path=vae_path,
+        episodes=vae_episodes,
+        train_steps=vae_train_steps,
+        batch_size=vae_batch_size,
+        learning_rate=vae_learning_rate,
+        device=device,
+        dataset_path=vae_dataset_path,
+        collect_log_interval=collect_log_interval,
+        train_log_interval=train_log_interval,
+        logger=logger,
+    )
+
+    if logger is not None:
+        logger("[pipeline] stage=env_model")
+    env_result = pretrain_main_env_model(
+        config,
+        vae_path=vae_path,
+        save_path=env_model_path,
+        episodes=env_episodes,
+        train_steps=env_train_steps,
+        batch_size=env_batch_size,
+        learning_rate=env_learning_rate,
+        device=device,
+        dataset_path=env_dataset_path,
+        collect_log_interval=collect_log_interval,
+        train_log_interval=train_log_interval,
+        logger=logger,
+    )
+
+    if logger is not None:
+        logger(f"[pipeline] stage=rl algo={rl_algo}")
+    rl_result = train_main_vector_rl(
+        config,
+        vae_path=vae_path,
+        env_model_path=env_model_path,
+        rl_algo=rl_algo,
+        total_timesteps=total_timesteps,
+        eval_episodes=eval_episodes,
+        output_dir=rl_output_path,
+        device=device,
+        verbose=verbose,
+        batch_size=rl_batch_size,
+        buffer_size=rl_buffer_size,
+        learning_rate=rl_learning_rate,
+    )
+    return {
+        "vae": vae_result,
+        "env_model": env_result,
+        "rl": rl_result,
+        "output_dir": str(output_path),
+    }
 
 
 class MainVectorObservationWrapper:
