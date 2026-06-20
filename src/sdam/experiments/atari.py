@@ -2,8 +2,6 @@ from __future__ import annotations
 
 import csv
 import time
-import warnings
-from dataclasses import replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -111,48 +109,6 @@ def build_sdam_atari_model(
         clip_range=config.ppo.clip_range,
         verbose=verbose,
         device=device,
-    )
-
-
-def build_sdam_alternating_atari_model(
-    config: AtariSDAMConfig,
-    env,
-    verbose: int = 1,
-    device: str = "auto",
-    logger: Callable[[str], None] | None = None,
-    auxiliary_log_interval: int = 10,
-):
-    return SDAMAlternatingPPO(
-        "CnnPolicy",
-        env,
-        policy_kwargs=build_sdam_atari_policy_kwargs(config),
-        learning_rate=config.ppo.learning_rate,
-        n_steps=config.ppo.n_steps,
-        batch_size=config.ppo.batch_size,
-        gamma=config.ppo.gamma,
-        gae_lambda=config.ppo.gae_lambda,
-        clip_range=config.ppo.clip_range,
-        verbose=verbose,
-        device=device,
-        autoencoder_class=SDAMAtariAutoEncoder,
-        autoencoder_kwargs={
-            "sequence_length": config.env.n_stack,
-            "static_dim": config.model.static_dim,
-            "dynamic_dim": config.model.dynamic_dim,
-            "assoc_dim": config.model.assoc_dim,
-            "hidden_channels": config.model.hidden_channels,
-            "reconstruction_weight": config.pretraining.reconstruction_weight,
-            "prediction_weight": config.pretraining.prediction_weight,
-        },
-        alternating_interval=config.alternating.interval,
-        alternating_updates=config.alternating.updates,
-        auxiliary_batch_size=config.alternating.batch_size,
-        auxiliary_learning_rate=config.alternating.learning_rate,
-        pretrained_path=config.alternating.pretrained_path,
-        reconstruction_weight=config.pretraining.reconstruction_weight,
-        prediction_weight=config.pretraining.prediction_weight,
-        logger=logger,
-        auxiliary_log_interval=auxiliary_log_interval,
     )
 
 
@@ -334,153 +290,6 @@ class SDAMAtariPretrainer:
         }
 
 
-class SDAMAlternatingPPO:
-    def __init__(
-        self,
-        *ppo_args,
-        autoencoder_class,
-        autoencoder_kwargs: dict[str, Any],
-        alternating_interval: int,
-        alternating_updates: int,
-        auxiliary_batch_size: int,
-        auxiliary_learning_rate: float,
-        pretrained_path: str = "",
-        reconstruction_weight: float = 1.0,
-        prediction_weight: float = 1.0,
-        logger: Callable[[str], None] | None = None,
-        auxiliary_log_interval: int = 10,
-        **ppo_kwargs,
-    ) -> None:
-        if alternating_interval <= 0:
-            raise ValueError("alternating_interval must be positive")
-        if alternating_updates <= 0:
-            raise ValueError("alternating_updates must be positive")
-
-        PPO = _load_ppo()
-        self.model = PPO(*ppo_args, **ppo_kwargs)
-        self.device = torch.device(getattr(self.model, "device", ppo_kwargs.get("device", "cpu")))
-        self.alternating_interval = alternating_interval
-        self.alternating_updates = alternating_updates
-        self.auxiliary_batch_size = auxiliary_batch_size
-        self.reconstruction_weight = reconstruction_weight
-        self.prediction_weight = prediction_weight
-        self.logger = logger
-        self.auxiliary_log_interval = auxiliary_log_interval
-        self.autoencoder = autoencoder_class(**autoencoder_kwargs)
-        self._tie_encoder_to_policy()
-        self.autoencoder.to(self.device)
-        if pretrained_path and Path(pretrained_path).exists():
-            self.load_pretrained_autoencoder(pretrained_path)
-        elif pretrained_path:
-            warnings.warn(
-                f"pretrained SDAM checkpoint not found: {pretrained_path}; "
-                "continuing without pretraining weights",
-                RuntimeWarning,
-                stacklevel=2,
-            )
-        self.auxiliary_optimizer = torch.optim.Adam(
-            self.autoencoder.parameters(),
-            lr=auxiliary_learning_rate,
-        )
-        self.auxiliary_losses: list[float] = []
-        if self.logger is not None:
-            self.logger(
-                "[alternating] start "
-                f"interval={self.alternating_interval} updates={self.alternating_updates} "
-                f"batch_size={self.auxiliary_batch_size} device={self.device}"
-            )
-
-    def __getattr__(self, name: str):
-        if name == "model":
-            raise AttributeError(name)
-        return getattr(self.model, name)
-
-    def _tie_encoder_to_policy(self) -> None:
-        features_extractor = getattr(self.model.policy, "features_extractor", None)
-        if features_extractor is None:
-            return
-        encoder = getattr(features_extractor, "encoder", None)
-        if encoder is not None:
-            self.autoencoder.encoder = encoder
-
-    def load_pretrained_autoencoder(self, checkpoint_path: str | Path) -> None:
-        checkpoint = _safe_torch_load(checkpoint_path, map_location="cpu")
-        state_dict = checkpoint.get("model_state_dict", checkpoint)
-        self.autoencoder.load_state_dict(state_dict, strict=False)
-        self._tie_encoder_to_policy()
-        self.autoencoder.to(self.device)
-
-    def learn(self, total_timesteps: int, **kwargs):
-        if total_timesteps <= 0:
-            raise ValueError("total_timesteps must be positive")
-        num_envs = int(getattr(self.model.env, "num_envs", 1))
-        n_steps = int(getattr(self.model, "n_steps", 1))
-        chunk_size = max(1, self.alternating_interval * n_steps * num_envs)
-        remaining = total_timesteps
-        reset_num_timesteps = kwargs.pop("reset_num_timesteps", True)
-        while remaining > 0:
-            chunk = min(chunk_size, remaining)
-            self.model.learn(
-                total_timesteps=chunk,
-                reset_num_timesteps=reset_num_timesteps,
-                **kwargs,
-            )
-            reset_num_timesteps = False
-            remaining -= chunk
-            observations = self._rollout_observations()
-            if observations is not None:
-                loss = self.update_autoencoder(observations)
-                update_count = len(self.auxiliary_losses)
-                if self.logger is not None and (
-                    update_count == self.alternating_updates
-                    or (
-                        self.auxiliary_log_interval > 0
-                        and update_count % self.auxiliary_log_interval == 0
-                    )
-                ):
-                    completed = total_timesteps - remaining
-                    self.logger(
-                        "[alternating] "
-                        f"timesteps={completed}/{total_timesteps} "
-                        f"aux_updates={update_count} loss={loss:.6f}"
-                    )
-        return self
-
-    def _rollout_observations(self) -> torch.Tensor | None:
-        rollout_buffer = getattr(self.model, "rollout_buffer", None)
-        observations = getattr(rollout_buffer, "observations", None)
-        if observations is None:
-            return None
-        tensor = torch.as_tensor(observations)
-        if tensor.ndim == 5:
-            tensor = tensor.reshape(-1, *tensor.shape[2:])
-        if tensor.ndim != 4:
-            return None
-        return tensor
-
-    def update_autoencoder(self, observations: torch.Tensor) -> float:
-        if observations.shape[0] == 0:
-            return 0.0
-        batch_size = min(self.auxiliary_batch_size, observations.shape[0])
-        last_loss = 0.0
-        for _ in range(self.alternating_updates):
-            indices = torch.randint(0, observations.shape[0], (batch_size,))
-            batch = atari_observations_to_sdam(
-                observations[indices],
-                self.autoencoder.sequence_length,
-            ).to(self.device)
-            self.auxiliary_optimizer.zero_grad()
-            outputs = self.autoencoder(batch)
-            outputs["loss"].backward()
-            self.auxiliary_optimizer.step()
-            last_loss = float(outputs["loss"].detach().cpu().item())
-            self.auxiliary_losses.append(last_loss)
-        return last_loss
-
-    def save(self, path):
-        return self.model.save(path)
-
-
 def evaluate_atari_model(model, env, n_eval_episodes: int = 10) -> dict[str, float | int]:
     if n_eval_episodes <= 0:
         raise ValueError("n_eval_episodes must be positive")
@@ -541,8 +350,6 @@ def compare_atari_methods(
     methods: tuple[str, ...] = ("naturecnn", "sdam"),
     verbose: int = 1,
     device: str = "auto",
-    logger: Callable[[str], None] | None = None,
-    auxiliary_log_interval: int = 10,
 ) -> list[dict[str, str | float | int]]:
     if total_timesteps <= 0:
         raise ValueError("total_timesteps must be positive")
@@ -553,7 +360,7 @@ def compare_atari_methods(
     output_path.mkdir(parents=True, exist_ok=True)
     rows: list[dict[str, str | float | int]] = []
     for method in methods:
-        if method not in ("naturecnn", "sdam", "sdam_alternating"):
+        if method not in ("naturecnn", "sdam"):
             raise ValueError(f"unknown Atari comparison method: {method}")
         env = None
         try:
@@ -572,15 +379,6 @@ def compare_atari_methods(
                     verbose=verbose,
                     device=device,
                 )
-            else:
-                model = build_sdam_alternating_atari_model(
-                    config,
-                    env,
-                    verbose=verbose,
-                    device=device,
-                    logger=logger,
-                    auxiliary_log_interval=auxiliary_log_interval,
-                )
 
             model.learn(total_timesteps=total_timesteps)
             model_path = output_path / f"{method}.zip"
@@ -594,88 +392,6 @@ def compare_atari_methods(
 
     write_comparison_outputs(rows, output_path)
     return rows
-
-
-def run_atari_sdam_pipeline(
-    config: AtariSDAMConfig,
-    output_dir: str | Path,
-    collect_steps: int | None = None,
-    pretrain_steps: int | None = None,
-    total_timesteps: int | None = None,
-    eval_episodes: int = 10,
-    methods: tuple[str, ...] = ("naturecnn", "sdam", "sdam_alternating"),
-    verbose: int = 1,
-    device: str = "auto",
-    collect_log_interval: int = 1000,
-    train_log_interval: int = 100,
-    alternating_log_interval: int = 10,
-    logger: Callable[[str], None] | None = None,
-) -> dict[str, str | list[dict[str, str | float | int]]]:
-    output_path = Path(output_dir)
-    output_path.mkdir(parents=True, exist_ok=True)
-    dataset_path = output_path / "random_sequences.pt"
-    pretrain_path = output_path / "sdam_pretrain"
-    comparison_path = output_path / "compare"
-    steps = collect_steps if collect_steps is not None else config.pretraining.collect_steps
-    train_steps = (
-        pretrain_steps if pretrain_steps is not None else config.pretraining.train_steps
-    )
-    timesteps = (
-        total_timesteps
-        if total_timesteps is not None
-        else config.training.total_timesteps
-    )
-
-    if logger is not None:
-        logger("[pipeline] stage=collect")
-    env = None
-    try:
-        env = build_atari_env(config)
-        collected_path = collect_random_atari_sequences(
-            env,
-            steps=steps,
-            sequence_length=config.env.n_stack,
-            output_path=dataset_path,
-            log_interval=collect_log_interval,
-            logger=logger,
-        )
-    finally:
-        close = getattr(env, "close", None)
-        if close is not None:
-            close()
-
-    if logger is not None:
-        logger("[pipeline] stage=pretrain")
-    pretrain_result = SDAMAtariPretrainer(config, device=device).train(
-        dataset_path=collected_path,
-        save_path=pretrain_path,
-        train_steps=train_steps,
-        log_interval=train_log_interval,
-        logger=logger,
-    )
-    checkpoint_path = str(pretrain_result["checkpoint_path"])
-    alternating = replace(config.alternating, pretrained_path=checkpoint_path)
-    comparison_config = replace(config, alternating=alternating)
-
-    if logger is not None:
-        logger("[pipeline] stage=compare")
-    rows = compare_atari_methods(
-        comparison_config,
-        total_timesteps=timesteps,
-        eval_episodes=eval_episodes,
-        output_dir=comparison_path,
-        methods=methods,
-        verbose=verbose,
-        device=device,
-        logger=logger,
-        auxiliary_log_interval=alternating_log_interval,
-    )
-    return {
-        "dataset_path": str(collected_path),
-        "checkpoint_path": checkpoint_path,
-        "comparison_dir": str(comparison_path),
-        "rows": rows,
-    }
 
 
 def write_comparison_outputs(

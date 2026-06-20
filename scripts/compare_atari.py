@@ -9,7 +9,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Train and evaluate NatureCNN, SDAM, and alternating SDAM PPO on one Atari config."
+        description="Train and evaluate NatureCNN and SDAM PPO on one Atari config."
     )
     parser.add_argument("--config", type=Path, default=Path("configs/atari/sdam_ppo.yaml"))
     parser.add_argument("--timesteps", type=int, default=1000)
@@ -17,11 +17,10 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-dir", type=Path, default=Path("runs/atari/compare"))
     parser.add_argument("--verbose", type=int, default=1)
     parser.add_argument("--device", default="auto")
-    parser.add_argument("--alternating-log-interval", type=int, default=10)
     parser.add_argument(
         "--methods",
         nargs="+",
-        choices=("naturecnn", "sdam", "sdam_alternating"),
+        choices=("naturecnn", "sdam"),
         default=("naturecnn", "sdam"),
     )
     return parser.parse_args()
@@ -34,7 +33,6 @@ def main() -> None:
     from sdam.experiments.atari import compare_atari_methods, format_comparison_markdown
 
     config = load_atari_config(args.config)
-    logger = lambda message: print(message, flush=True)
     rows = compare_atari_methods(
         config,
         total_timesteps=args.timesteps,
@@ -43,8 +41,6 @@ def main() -> None:
         methods=tuple(args.methods),
         verbose=args.verbose,
         device=args.device,
-        logger=logger,
-        auxiliary_log_interval=args.alternating_log_interval,
     )
     print(format_comparison_markdown(rows))
 

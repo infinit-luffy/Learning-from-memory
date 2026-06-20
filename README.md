@@ -102,7 +102,7 @@ python scripts/train_atari_sdam.py \
   --save-path runs/atari/sdam_ppo_smoke
 ```
 
-Run a simple NatureCNN vs SDAM comparison:
+Run a simple PPO NatureCNN vs SDAM feature-extractor comparison:
 
 ```bash
 python scripts/compare_atari.py \
@@ -119,48 +119,41 @@ The comparison script writes:
 - `runs/atari/compare_smoke/naturecnn.zip`
 - `runs/atari/compare_smoke/sdam.zip`
 
-Run the full Alien SDAM pipeline in one command:
+Run the main-branch-style Alien experiment:
 
 ```bash
-python scripts/run_atari_sdam_pipeline.py \
-  --config configs/atari/alien_sdam_alternating_ppo.yaml \
-  --methods naturecnn sdam sdam_alternating \
-  --steps 50000 \
-  --train-steps 1000 \
-  --timesteps 100000 \
+python scripts/train_main_vector_dqn.py \
+  --config configs/atari/alien_sdam_ppo.yaml \
+  --vae-path vae_Alien.pth \
+  --env-model-path env_Alien.pth \
+  --timesteps 1000000 \
   --eval-episodes 10 \
   --device cuda \
-  --output-dir runs/alien/pipeline_100k
+  --output-dir runs/alien/main_vector_dqn_1m
 ```
 
-This command collects random Atari frame stacks, pretrains the SDAM
-autoencoder, then runs the PPO comparison. The `sdam_alternating` method
-continues alternating PPO updates with SDAM reconstruction/prediction updates
-during PPO training.
+This matches the stronger route from `main`: the pretrained VAE/background
+model and transition model are frozen, each Atari frame is converted to a
+160-dimensional vector observation, and Stable-Baselines3 DQN trains an
+`MlpPolicy` on top of that vector state.
 
-For debugging, you can still run representation pretraining separately:
+The output directory contains:
+
+- `runs/alien/main_vector_dqn_1m/comparison.csv`
+- `runs/alien/main_vector_dqn_1m/main_vector_dqn.zip`
+
+For a longer Alien run, use the same command with more timesteps:
 
 ```bash
-python scripts/pretrain_atari_sdam.py \
-  --config configs/atari/alien_sdam_pretrain.yaml \
-  --steps 50000 \
-  --save-path runs/alien/sdam_pretrain
+python scripts/train_main_vector_dqn.py \
+  --config configs/atari/alien_sdam_ppo.yaml \
+  --vae-path vae_Alien.pth \
+  --env-model-path env_Alien.pth \
+  --timesteps 5000000 \
+  --eval-episodes 20 \
+  --device cuda \
+  --output-dir runs/alien/main_vector_dqn_5m
 ```
-
-And then run the Alien comparison separately:
-
-```bash
-python scripts/compare_atari.py \
-  --config configs/atari/alien_sdam_alternating_ppo.yaml \
-  --methods naturecnn sdam sdam_alternating \
-  --timesteps 100000 \
-  --eval-episodes 10 \
-  --output-dir runs/alien/compare_100k
-```
-
-For a quick server smoke test, reduce `--steps`, `--timesteps`, and
-`--eval-episodes`. If the configured pretraining checkpoint is missing, the
-alternating method warns and starts from randomly initialized SDAM weights.
 
 Run the default configured Atari job:
 

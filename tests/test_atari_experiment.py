@@ -18,21 +18,19 @@ warnings.filterwarnings(
 from sdam.config import load_atari_config
 from sdam.experiments.atari import (
     SDAMAtariPretrainer,
-    SDAMAlternatingPPO,
     collect_random_atari_sequences,
     compare_atari_methods,
     build_atari_env,
-    build_sdam_alternating_atari_model,
     build_naturecnn_atari_model,
     build_sdam_atari_model,
     build_sdam_atari_policy_kwargs,
     evaluate_atari_model,
     format_comparison_markdown,
-    run_atari_sdam_pipeline,
     _resolve_device,
     _safe_torch_load,
     train_sdam_atari,
 )
+from sdam.experiments.main_vector_dqn import MainEnvModelV2, MainVectorObservationWrapper
 from sdam.policies.sb3_atari import SDAMAtariAutoEncoder, SDAMAtariFeaturesExtractor
 
 
@@ -57,6 +55,38 @@ def install_fake_atari_env_tools(monkeypatch, make_atari_env, VecFrameStack):
     monkeypatch.setitem(sys.modules, "stable_baselines3.common", common)
     monkeypatch.setitem(sys.modules, "stable_baselines3.common.env_util", env_util)
     monkeypatch.setitem(sys.modules, "stable_baselines3.common.vec_env", vec_env)
+
+
+def install_fake_gymnasium(monkeypatch):
+    gymnasium = types.ModuleType("gymnasium")
+    spaces = types.ModuleType("gymnasium.spaces")
+
+    class Box:
+        def __init__(self, low, high, shape, dtype):
+            self.low = low
+            self.high = high
+            self.shape = shape
+            self.dtype = dtype
+
+    class ObservationWrapper:
+        def __init__(self, env):
+            self.env = env
+            self.observation_space = getattr(env, "observation_space", None)
+
+        def reset(self, **kwargs):
+            result = self.env.reset(**kwargs)
+            observation, info = result if isinstance(result, tuple) else (result, {})
+            return self.observation(observation), info
+
+        def step(self, action):
+            observation, reward, terminated, truncated, info = self.env.step(action)
+            return self.observation(observation), reward, terminated, truncated, info
+
+    spaces.Box = Box
+    gymnasium.ObservationWrapper = ObservationWrapper
+    gymnasium.spaces = spaces
+    monkeypatch.setitem(sys.modules, "gymnasium", gymnasium)
+    monkeypatch.setitem(sys.modules, "gymnasium.spaces", spaces)
 
 
 def test_build_sdam_atari_policy_kwargs_uses_sdam_extractor():
@@ -136,6 +166,62 @@ def test_build_atari_env_raises_clear_error_without_sb3(monkeypatch):
 
     with pytest.raises(ImportError, match="Stable-Baselines3 is required"):
         build_atari_env(config)
+
+
+def test_main_vector_observation_wrapper_outputs_origin_main_vector(monkeypatch):
+    install_fake_gymnasium(monkeypatch)
+
+    class FakeEnv:
+        observation_space = None
+
+        def reset(self, **kwargs):
+            return torch.ones(84, 84, 1).numpy(), {}
+
+        def step(self, action):
+            return torch.ones(84, 84, 1).numpy(), 0.0, False, False, {}
+
+    class FakeVAE:
+        def eval(self):
+            return self
+
+        def generate(self, frame):
+            return torch.zeros(1, 1, 84, 84)
+
+        def encode(self, frame):
+            return torch.arange(32, dtype=torch.float32).unsqueeze(0), torch.zeros(1, 32)
+
+        def reparameterize(self, mu, log_var):
+            return mu
+
+    class FakeEnvModel:
+        def eval(self):
+            return self
+
+        def get_feature_encode(self, frame):
+            return torch.full((1, 32), 2.0)
+
+    wrapper = MainVectorObservationWrapper(
+        FakeEnv(),
+        FakeVAE(),
+        FakeEnvModel(),
+        torch.device("cpu"),
+    ).unwrap()
+
+    vector = wrapper.observation(torch.ones(84, 84, 1).numpy())
+
+    assert vector.shape == (160,)
+    assert vector.dtype.name == "float32"
+    assert vector[:96].tolist() == [0.0] * 96
+    assert vector[96:128].tolist() == [2.0] * 32
+    assert vector[128:].tolist() == [float(index) for index in range(32)]
+
+
+def test_main_vector_env_model_keeps_origin_main_checkpoint_keys():
+    state_dict = MainEnvModelV2(input_size=32, hidden_size=128).state_dict()
+
+    assert "connection_recog.atten.attn.weight" in state_dict
+    assert "connection_recog.atten.attn.bias" in state_dict
+    assert "feature_recog.fc_mu.weight" in state_dict
 
 
 def test_atari_module_imports_before_sb3_is_installed(monkeypatch):
@@ -221,108 +307,6 @@ def test_build_naturecnn_atari_model_uses_default_cnn_policy(monkeypatch):
     assert received["kwargs"]["learning_rate"] == config.ppo.learning_rate
     assert received["kwargs"]["verbose"] == 2
     assert received["kwargs"]["device"] == "cuda"
-
-
-def test_build_sdam_alternating_atari_model_uses_custom_ppo(monkeypatch):
-    config = load_atari_config(Path("configs/atari/alien_sdam_alternating_ppo.yaml"))
-    received = {}
-
-    class FakeAlternatingPPO:
-        def __init__(self, *args, **kwargs):
-            received["args"] = args
-            received["kwargs"] = kwargs
-
-    import sdam.experiments.atari as atari
-
-    monkeypatch.setattr(atari, "SDAMAlternatingPPO", FakeAlternatingPPO)
-
-    logs = []
-    logger = logs.append
-    model = build_sdam_alternating_atari_model(
-        config,
-        env="fake-env",
-        verbose=2,
-        device="cuda",
-        logger=logger,
-        auxiliary_log_interval=3,
-    )
-
-    assert isinstance(model, FakeAlternatingPPO)
-    assert received["args"] == ("CnnPolicy", "fake-env")
-    assert (
-        received["kwargs"]["policy_kwargs"]["features_extractor_class"]
-        is SDAMAtariFeaturesExtractor
-    )
-    assert received["kwargs"]["autoencoder_class"] is SDAMAtariAutoEncoder
-    assert received["kwargs"]["alternating_interval"] == config.alternating.interval
-    assert received["kwargs"]["alternating_updates"] == config.alternating.updates
-    assert received["kwargs"]["reconstruction_weight"] == config.pretraining.reconstruction_weight
-    assert received["kwargs"]["prediction_weight"] == config.pretraining.prediction_weight
-    assert received["kwargs"]["device"] == "cuda"
-    assert received["kwargs"]["logger"] is logger
-    assert received["kwargs"]["auxiliary_log_interval"] == 3
-
-
-def test_sdam_alternating_ppo_aligns_autoencoder_to_model_device(monkeypatch):
-    import sdam.experiments.atari as atari
-
-    class FakePPO:
-        def __init__(self, *args, **kwargs):
-            self.env = types.SimpleNamespace(num_envs=1)
-            self.n_steps = 1
-            self.device = torch.device("cpu")
-            self.policy = types.SimpleNamespace(
-                features_extractor=types.SimpleNamespace(encoder=torch.nn.Identity())
-            )
-            self.rollout_buffer = types.SimpleNamespace(
-                observations=torch.zeros(1, 1, 4, 84, 84)
-            )
-
-        def learn(self, *, total_timesteps, reset_num_timesteps):
-            self.learn_timesteps = total_timesteps
-            self.reset_num_timesteps = reset_num_timesteps
-
-    class FakeAutoEncoder(torch.nn.Module):
-        def __init__(self):
-            super().__init__()
-            self.sequence_length = 4
-            self.encoder = torch.nn.Identity()
-            self.param = torch.nn.Parameter(torch.tensor(1.0))
-            self.to_device = None
-
-        def to(self, device):
-            self.to_device = torch.device(device)
-            return super().to(device)
-
-        def forward(self, batch):
-            assert batch.device == self.to_device
-            return {"loss": self.param * batch.sum() * 0.0}
-
-    monkeypatch.setattr(atari, "_load_ppo", lambda: FakePPO)
-    logs = []
-
-    model = SDAMAlternatingPPO(
-        "CnnPolicy",
-        "fake-env",
-        autoencoder_class=FakeAutoEncoder,
-        autoencoder_kwargs={},
-        alternating_interval=1,
-        alternating_updates=1,
-        auxiliary_batch_size=1,
-        auxiliary_learning_rate=0.001,
-        logger=logs.append,
-        auxiliary_log_interval=1,
-        device="cpu",
-    )
-
-    assert model.device == torch.device("cpu")
-    assert model.autoencoder.to_device == torch.device("cpu")
-    model.update_autoencoder(torch.zeros(1, 4, 84, 84))
-    assert model.auxiliary_losses == [0.0]
-    model.learn(total_timesteps=1)
-    assert model.auxiliary_losses == [0.0, 0.0]
-    assert any("[alternating] start" in message for message in logs)
-    assert any("aux_updates=2" in message for message in logs)
 
 
 def test_evaluate_atari_model_uses_sb3_evaluate_policy(monkeypatch):
@@ -502,7 +486,7 @@ def test_safe_torch_load_requests_weights_only(monkeypatch, tmp_path):
     assert calls["weights_only"] is True
 
 
-def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternating(
+def test_compare_atari_methods_trains_and_evaluates_sdam_baseline(
     monkeypatch,
     tmp_path,
 ):
@@ -539,21 +523,6 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
         calls["sdam_device"] = device
         return FakeModel("sdam")
 
-    def fake_build_sdam_alternating_atari_model(
-        received_config,
-        env,
-        *,
-        verbose,
-        device,
-        logger,
-        auxiliary_log_interval,
-    ):
-        calls["sdam_alternating_env"] = env.name
-        calls["sdam_alternating_device"] = device
-        calls["sdam_alternating_logger"] = logger
-        calls["sdam_alternating_log_interval"] = auxiliary_log_interval
-        return FakeModel("sdam_alternating")
-
     def fake_build_naturecnn_atari_model(received_config, env, *, verbose, device):
         calls["naturecnn_env"] = env.name
         calls["naturecnn_device"] = device
@@ -564,7 +533,6 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
             "mean_reward": {
                 "naturecnn": 5.0,
                 "sdam": 10.0,
-                "sdam_alternating": 15.0,
             }[model.name],
             "std_reward": 1.0,
             "mean_ep_length": 20.0,
@@ -573,140 +541,29 @@ def test_compare_atari_methods_trains_and_evaluates_sdam_baseline_and_alternatin
 
     monkeypatch.setattr(atari, "build_atari_env", fake_build_atari_env)
     monkeypatch.setattr(atari, "build_sdam_atari_model", fake_build_sdam_atari_model)
-    monkeypatch.setattr(
-        atari,
-        "build_sdam_alternating_atari_model",
-        fake_build_sdam_alternating_atari_model,
-    )
     monkeypatch.setattr(atari, "build_naturecnn_atari_model", fake_build_naturecnn_atari_model)
     monkeypatch.setattr(atari, "evaluate_atari_model", fake_evaluate_atari_model)
-    logs = []
-    logger = logs.append
 
     rows = compare_atari_methods(
         config,
         total_timesteps=12,
         eval_episodes=3,
         output_dir=tmp_path,
-        methods=("naturecnn", "sdam", "sdam_alternating"),
+        methods=("naturecnn", "sdam"),
         verbose=0,
         device="cuda",
-        logger=logger,
-        auxiliary_log_interval=4,
     )
 
-    assert [row["method"] for row in rows] == ["naturecnn", "sdam", "sdam_alternating"]
+    assert [row["method"] for row in rows] == ["naturecnn", "sdam"]
     assert rows[0]["mean_reward"] == 5.0
     assert rows[1]["mean_reward"] == 10.0
-    assert rows[2]["mean_reward"] == 15.0
     assert calls["naturecnn_timesteps"] == 12
     assert calls["sdam_timesteps"] == 12
-    assert calls["sdam_alternating_timesteps"] == 12
-    assert calls["closed"] == ["env-1", "env-2", "env-3"]
+    assert calls["closed"] == ["env-1", "env-2"]
     assert calls["naturecnn_device"] == "cuda"
     assert calls["sdam_device"] == "cuda"
-    assert calls["sdam_alternating_device"] == "cuda"
-    assert calls["sdam_alternating_logger"] is logger
-    assert calls["sdam_alternating_log_interval"] == 4
     assert calls["naturecnn_save_path"].endswith("naturecnn.zip")
     assert calls["sdam_save_path"].endswith("sdam.zip")
-    assert calls["sdam_alternating_save_path"].endswith("sdam_alternating.zip")
-
-
-def test_run_atari_sdam_pipeline_collects_pretrains_and_compares(monkeypatch, tmp_path):
-    config = load_atari_config(Path("configs/atari/alien_sdam_alternating_ppo.yaml"))
-    calls = {}
-
-    class FakeEnv:
-        def close(self):
-            calls["env_closed"] = True
-
-    class FakePretrainer:
-        def __init__(self, received_config, *, device):
-            calls["pretrainer_config"] = received_config
-            calls["pretrainer_device"] = device
-
-        def train(self, *, dataset_path, save_path, train_steps, log_interval, logger):
-            calls["train_dataset_path"] = str(dataset_path)
-            calls["train_save_path"] = str(save_path)
-            calls["train_steps"] = train_steps
-            logger("[fake] pretrain")
-            return {
-                "checkpoint_path": str(Path(save_path) / "sdam_autoencoder.pt"),
-                "loss": 0.5,
-                "train_steps": train_steps,
-                "device": "cuda",
-            }
-
-    import sdam.experiments.atari as atari
-
-    monkeypatch.setattr(atari, "build_atari_env", lambda received_config: FakeEnv())
-
-    def fake_collect(env, *, steps, sequence_length, output_path, log_interval, logger):
-        calls["collect_steps"] = steps
-        calls["collect_sequence_length"] = sequence_length
-        calls["collect_output_path"] = str(output_path)
-        logger("[fake] collect")
-        return output_path
-
-    def fake_compare(
-        received_config,
-        *,
-        total_timesteps,
-        eval_episodes,
-        output_dir,
-        methods,
-        verbose,
-        device,
-        logger,
-        auxiliary_log_interval,
-    ):
-        calls["compare_pretrained_path"] = received_config.alternating.pretrained_path
-        calls["compare_timesteps"] = total_timesteps
-        calls["compare_methods"] = methods
-        calls["compare_device"] = device
-        calls["compare_logger"] = logger
-        calls["compare_auxiliary_log_interval"] = auxiliary_log_interval
-        calls["compare_output_dir"] = str(output_dir)
-        return [{"method": "sdam_alternating", "mean_reward": 1.0}]
-
-    monkeypatch.setattr(atari, "collect_random_atari_sequences", fake_collect)
-    monkeypatch.setattr(atari, "SDAMAtariPretrainer", FakePretrainer)
-    monkeypatch.setattr(atari, "compare_atari_methods", fake_compare)
-    logs = []
-    logger = logs.append
-
-    result = run_atari_sdam_pipeline(
-        config,
-        output_dir=tmp_path,
-        collect_steps=7,
-        pretrain_steps=3,
-        total_timesteps=11,
-        eval_episodes=2,
-        methods=("sdam_alternating",),
-        verbose=0,
-        device="cuda",
-        collect_log_interval=5,
-        train_log_interval=1,
-        alternating_log_interval=6,
-        logger=logger,
-    )
-
-    assert calls["env_closed"]
-    assert calls["collect_steps"] == 7
-    assert calls["collect_sequence_length"] == config.env.n_stack
-    assert calls["pretrainer_device"] == "cuda"
-    assert calls["train_steps"] == 3
-    assert calls["compare_timesteps"] == 11
-    assert calls["compare_methods"] == ("sdam_alternating",)
-    assert calls["compare_device"] == "cuda"
-    assert calls["compare_logger"] is logger
-    assert calls["compare_auxiliary_log_interval"] == 6
-    assert calls["compare_pretrained_path"].endswith("sdam_pretrain/sdam_autoencoder.pt")
-    assert result["checkpoint_path"].endswith("sdam_pretrain/sdam_autoencoder.pt")
-    assert result["comparison_dir"].endswith("compare")
-    assert any("[pipeline] stage=collect" in message for message in logs)
-    assert any("[pipeline] stage=compare" in message for message in logs)
 
 
 def test_format_comparison_markdown_includes_methods_and_rewards():
@@ -915,8 +772,8 @@ def test_compare_atari_script_help_runs():
     assert "--eval-episodes" in result.stdout
     assert "--output-dir" in result.stdout
     assert "--device" in result.stdout
-    assert "--alternating-log-interval" in result.stdout
-    assert "sdam_alternating" in result.stdout
+    assert "--alternating-log-interval" not in result.stdout
+    assert "sdam_alternating" not in result.stdout
 
 
 def test_pretrain_atari_script_help_runs():
@@ -936,19 +793,19 @@ def test_pretrain_atari_script_help_runs():
     assert "--save-path" in result.stdout
 
 
-def test_run_atari_sdam_pipeline_script_help_runs():
+def test_train_main_vector_dqn_script_help_runs():
     result = subprocess.run(
-        [sys.executable, "scripts/run_atari_sdam_pipeline.py", "--help"],
+        [sys.executable, "scripts/train_main_vector_dqn.py", "--help"],
         check=True,
         capture_output=True,
         text=True,
     )
 
     assert "--config" in result.stdout
-    assert "--steps" in result.stdout
-    assert "--train-steps" in result.stdout
     assert "--timesteps" in result.stdout
     assert "--eval-episodes" in result.stdout
+    assert "--vae-path" in result.stdout
+    assert "--env-model-path" in result.stdout
     assert "--device" in result.stdout
-    assert "--alternating-log-interval" in result.stdout
-    assert "sdam_alternating" in result.stdout
+    assert "--batch-size" in result.stdout
+    assert "160-D vector observation" in result.stdout
