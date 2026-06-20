@@ -60,6 +60,32 @@ def _load_gymnasium():
     return gym, spaces
 
 
+def _ale_fallback_env_id(env_id: str) -> str | None:
+    if env_id.startswith("ALE/"):
+        return None
+    suffixes = ("NoFrameskip-v4", "-v4")
+    for suffix in suffixes:
+        if env_id.endswith(suffix):
+            game = env_id[: -len(suffix)]
+            return f"ALE/{game}-v5"
+    return None
+
+
+def _make_gym_atari_env(gym, env_id: str):
+    try:
+        return gym.make(env_id)
+    except Exception as original_exc:
+        fallback_id = _ale_fallback_env_id(env_id)
+        if fallback_id is None:
+            raise
+        try:
+            return gym.make(fallback_id, frameskip=1, repeat_action_probability=0.0)
+        except TypeError:
+            return gym.make(fallback_id)
+        except Exception:
+            raise original_exc
+
+
 class MainVanillaVAE(nn.Module):
     """VAE architecture compatible with origin/main's VanillaVAE checkpoints."""
 
@@ -559,7 +585,7 @@ def build_main_env_model_collection_env(config: AtariSDAMConfig):
     AtariWrapper, DummyVecEnv, _ = _load_vec_env_tools()
 
     def _init():
-        env = gym.make(config.env.env_id)
+        env = _make_gym_atari_env(gym, config.env.env_id)
         env = AtariWrapper(
             env,
             terminal_on_life_loss=config.env.terminal_on_life_loss,
@@ -923,7 +949,7 @@ def build_main_vector_env(
 
     def make_env(rank: int):
         def _init():
-            env = gym.make(config.env.env_id)
+            env = _make_gym_atari_env(gym, config.env.env_id)
             env = AtariWrapper(
                 env,
                 terminal_on_life_loss=config.env.terminal_on_life_loss,

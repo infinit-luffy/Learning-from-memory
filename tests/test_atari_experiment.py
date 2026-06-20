@@ -33,6 +33,7 @@ from sdam.experiments.atari import (
 from sdam.experiments.main_vector_dqn import (
     MainEnvModelV2,
     MainVectorObservationWrapper,
+    _ale_fallback_env_id,
     collect_main_env_model_dataset,
     train_main_vae_from_frames,
     train_main_env_model_from_dataset,
@@ -228,6 +229,12 @@ def test_main_vector_env_model_keeps_origin_main_checkpoint_keys():
     assert "connection_recog.atten.attn.weight" in state_dict
     assert "connection_recog.atten.attn.bias" in state_dict
     assert "feature_recog.fc_mu.weight" in state_dict
+
+
+def test_main_vector_maps_legacy_atari_env_id_to_gymnasium_ale():
+    assert _ale_fallback_env_id("AlienNoFrameskip-v4") == "ALE/Alien-v5"
+    assert _ale_fallback_env_id("PongNoFrameskip-v4") == "ALE/Pong-v5"
+    assert _ale_fallback_env_id("ALE/Alien-v5") is None
 
 
 def test_train_main_vae_from_frames_saves_checkpoint(tmp_path):
