@@ -30,7 +30,12 @@ from sdam.experiments.atari import (
     _safe_torch_load,
     train_sdam_atari,
 )
-from sdam.experiments.main_vector_dqn import MainEnvModelV2, MainVectorObservationWrapper
+from sdam.experiments.main_vector_dqn import (
+    MainEnvModelV2,
+    MainVectorObservationWrapper,
+    collect_main_env_model_dataset,
+    train_main_env_model_from_dataset,
+)
 from sdam.policies.sb3_atari import SDAMAtariAutoEncoder, SDAMAtariFeaturesExtractor
 
 
@@ -222,6 +227,70 @@ def test_main_vector_env_model_keeps_origin_main_checkpoint_keys():
     assert "connection_recog.atten.attn.weight" in state_dict
     assert "connection_recog.atten.attn.bias" in state_dict
     assert "feature_recog.fc_mu.weight" in state_dict
+
+
+def test_collect_main_env_model_dataset_matches_origin_main_shapes():
+    class FakeActionSpace:
+        def sample(self):
+            return 0
+
+    class FakeEnv:
+        action_space = FakeActionSpace()
+
+        def __init__(self):
+            self.step_count = 0
+
+        def reset(self):
+            self.step_count = 0
+            return torch.zeros(1, 84, 84, 1)
+
+        def step(self, action):
+            self.step_count += 1
+            observation = torch.full((1, 84, 84, 1), float(self.step_count))
+            done = self.step_count >= 2
+            return observation, 0.0, done, {}
+
+    class FakeVAE:
+        def eval(self):
+            return self
+
+        def generate(self, frame):
+            return torch.zeros_like(frame)
+
+    dataset = collect_main_env_model_dataset(
+        FakeEnv(),
+        FakeVAE(),
+        episodes=2,
+        device="cpu",
+    )
+
+    assert dataset["org"].shape == (4, 1, 84, 84)
+    assert dataset["feature"].shape == (4, 4, 1, 84, 84)
+    assert dataset["background"].shape == (4, 1, 1, 60, 45)
+    assert dataset["feature"].dtype == torch.float32
+
+
+def test_train_main_env_model_from_dataset_saves_checkpoint(tmp_path):
+    dataset = {
+        "org": torch.rand(2, 1, 84, 84),
+        "feature": torch.rand(2, 4, 1, 84, 84),
+        "background": torch.rand(2, 1, 1, 60, 45),
+    }
+    save_path = tmp_path / "env_Alien.pth"
+
+    result = train_main_env_model_from_dataset(
+        dataset,
+        save_path=save_path,
+        train_steps=1,
+        batch_size=1,
+        learning_rate=1e-4,
+        device="cpu",
+    )
+
+    assert save_path.exists()
+    assert result["checkpoint_path"] == str(save_path)
+    assert result["train_steps"] == 1
+    assert result["loss"] >= 0.0
 
 
 def test_atari_module_imports_before_sb3_is_installed(monkeypatch):
@@ -809,3 +878,19 @@ def test_train_main_vector_dqn_script_help_runs():
     assert "--device" in result.stdout
     assert "--batch-size" in result.stdout
     assert "160-D vector observation" in result.stdout
+
+
+def test_pretrain_main_env_model_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/pretrain_main_env_model.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--vae-path" in result.stdout
+    assert "--save-path" in result.stdout
+    assert "--episodes" in result.stdout
+    assert "--train-steps" in result.stdout
+    assert "--device" in result.stdout

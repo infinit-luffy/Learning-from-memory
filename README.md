@@ -119,7 +119,22 @@ The comparison script writes:
 - `runs/atari/compare_smoke/naturecnn.zip`
 - `runs/atari/compare_smoke/sdam.zip`
 
-Run the main-branch-style Alien experiment:
+Pretrain the main-branch-style Alien environment model. This step assumes
+`vae_Alien.pth` already exists:
+
+```bash
+python scripts/pretrain_main_env_model.py \
+  --config configs/atari/alien_sdam_ppo.yaml \
+  --vae-path vae_Alien.pth \
+  --save-path env_Alien.pth \
+  --episodes 1000 \
+  --train-steps 100 \
+  --batch-size 128 \
+  --device cuda \
+  --dataset-path runs/alien/main_env_model_dataset.pt
+```
+
+Then run the main-branch-style Alien experiment:
 
 ```bash
 python scripts/train_main_vector_dqn.py \
