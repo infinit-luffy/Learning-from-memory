@@ -60,6 +60,15 @@ def _load_gymnasium():
     return gym, spaces
 
 
+def _load_sb3_spaces():
+    try:
+        from stable_baselines3.common import preprocessing
+    except ImportError as exc:
+        raise ImportError(_SB3_EXTRA_MESSAGE) from exc
+
+    return preprocessing.spaces
+
+
 def _ale_fallback_env_id(env_id: str) -> str | None:
     if env_id.startswith("ALE/"):
         return None
@@ -949,7 +958,7 @@ class MainVectorVecEnvWrapper:
 
     def __init__(self, venv, vae: MainVanillaVAE, env_model: MainEnvModelV2, device: torch.device) -> None:
         _, VecEnvWrapper, _ = _load_vec_env_tools()
-        _, spaces = _load_gymnasium()
+        spaces = _load_sb3_spaces()
         vae.eval()
         env_model.eval()
         outer = self
