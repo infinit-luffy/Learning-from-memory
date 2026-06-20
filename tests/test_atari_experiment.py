@@ -34,6 +34,7 @@ from sdam.experiments.main_vector_dqn import (
     MainEnvModelV2,
     MainVectorObservationWrapper,
     _ale_fallback_env_id,
+    _make_gym_atari_env,
     collect_main_env_model_dataset,
     train_main_vae_from_frames,
     train_main_env_model_from_dataset,
@@ -235,6 +236,37 @@ def test_main_vector_maps_legacy_atari_env_id_to_gymnasium_ale():
     assert _ale_fallback_env_id("AlienNoFrameskip-v4") == "ALE/Alien-v5"
     assert _ale_fallback_env_id("PongNoFrameskip-v4") == "ALE/Pong-v5"
     assert _ale_fallback_env_id("ALE/Alien-v5") is None
+
+
+def test_make_gym_atari_env_tries_ale_fallback():
+    calls = []
+
+    class FakeGym:
+        def make(self, env_id, **kwargs):
+            calls.append((env_id, kwargs))
+            if env_id == "ALE/Alien-v5" and kwargs.get("frameskip") == 1:
+                return "fake-env"
+            raise RuntimeError(f"missing {env_id}")
+
+    assert _make_gym_atari_env(FakeGym(), "AlienNoFrameskip-v4") == "fake-env"
+    assert calls == [
+        ("AlienNoFrameskip-v4", {}),
+        ("ALE/Alien-v5", {"frameskip": 1, "repeat_action_probability": 0.0}),
+    ]
+
+
+def test_make_gym_atari_env_reports_all_attempts():
+    class FakeGym:
+        def make(self, env_id, **kwargs):
+            raise RuntimeError(f"missing {env_id}")
+
+    with pytest.raises(RuntimeError) as exc_info:
+        _make_gym_atari_env(FakeGym(), "AlienNoFrameskip-v4")
+
+    message = str(exc_info.value)
+    assert "AlienNoFrameskip-v4" in message
+    assert "ALE/Alien-v5" in message
+    assert "pip install" in message
 
 
 def test_train_main_vae_from_frames_saves_checkpoint(tmp_path):

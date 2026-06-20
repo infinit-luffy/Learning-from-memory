@@ -71,19 +71,42 @@ def _ale_fallback_env_id(env_id: str) -> str | None:
     return None
 
 
-def _make_gym_atari_env(gym, env_id: str):
+def _register_ale_py(gym) -> None:
     try:
-        return gym.make(env_id)
-    except Exception as original_exc:
-        fallback_id = _ale_fallback_env_id(env_id)
-        if fallback_id is None:
-            raise
+        import ale_py
+    except ImportError:
+        return
+    register_envs = getattr(gym, "register_envs", None)
+    if callable(register_envs):
         try:
-            return gym.make(fallback_id, frameskip=1, repeat_action_probability=0.0)
-        except TypeError:
-            return gym.make(fallback_id)
+            register_envs(ale_py)
         except Exception:
-            raise original_exc
+            return
+
+
+def _make_gym_atari_env(gym, env_id: str):
+    _register_ale_py(gym)
+    attempts: list[tuple[str, dict[str, Any]]] = [(env_id, {})]
+    fallback_id = _ale_fallback_env_id(env_id)
+    if fallback_id is not None:
+        attempts.append((fallback_id, {"frameskip": 1, "repeat_action_probability": 0.0}))
+        attempts.append((fallback_id, {}))
+
+    errors: list[str] = []
+    last_exc: Exception | None = None
+    for candidate_id, kwargs in attempts:
+        try:
+            return gym.make(candidate_id, **kwargs)
+        except Exception as exc:
+            last_exc = exc
+            kwargs_text = f", kwargs={kwargs}" if kwargs else ""
+            errors.append(f"{candidate_id}{kwargs_text}: {type(exc).__name__}: {exc}")
+    message = (
+        "Could not create Atari environment. Install Atari dependencies with "
+        "`pip install -e \".[atari]\"` and make sure ALE ROMs are available. Tried:\n- "
+        + "\n- ".join(errors)
+    )
+    raise RuntimeError(message) from last_exc
 
 
 class MainVanillaVAE(nn.Module):
