@@ -29,6 +29,15 @@ def _load_ppo():
     return PPO
 
 
+def _load_dqn():
+    try:
+        from stable_baselines3 import DQN
+    except ImportError as exc:
+        raise ImportError(_SB3_EXTRA_MESSAGE) from exc
+
+    return DQN
+
+
 def _load_atari_env_tools():
     try:
         from stable_baselines3.common.env_util import make_atari_env
@@ -128,6 +137,27 @@ def build_naturecnn_atari_model(
         gamma=config.ppo.gamma,
         gae_lambda=config.ppo.gae_lambda,
         clip_range=config.ppo.clip_range,
+        verbose=verbose,
+        device=device,
+    )
+
+
+def build_naturecnn_dqn_atari_model(
+    config: AtariSDAMConfig,
+    env,
+    verbose: int = 1,
+    device: str = "auto",
+    learning_rate: float = 1e-4,
+    batch_size: int = 256,
+    buffer_size: int = 500000,
+):
+    DQN = _load_dqn()
+    return DQN(
+        "CnnPolicy",
+        env,
+        learning_rate=learning_rate,
+        batch_size=batch_size,
+        buffer_size=buffer_size,
         verbose=verbose,
         device=device,
     )
@@ -336,6 +366,51 @@ def train_sdam_atari(
         model.learn(total_timesteps=steps)
         model.save(output_path)
         return model
+    finally:
+        close = getattr(env, "close", None)
+        if close is not None:
+            close()
+
+
+def train_naturecnn_dqn_atari(
+    config: AtariSDAMConfig,
+    total_timesteps: int,
+    eval_episodes: int,
+    output_dir: str | Path,
+    save_path: str | Path | None = None,
+    verbose: int = 1,
+    device: str = "auto",
+    learning_rate: float = 1e-4,
+    batch_size: int = 256,
+    buffer_size: int = 500000,
+) -> dict[str, str | float | int]:
+    if total_timesteps <= 0:
+        raise ValueError("total_timesteps must be positive")
+    if eval_episodes <= 0:
+        raise ValueError("eval_episodes must be positive")
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+    model_path = Path(save_path) if save_path is not None else output_path / "naturecnn_dqn.zip"
+    model_path.parent.mkdir(parents=True, exist_ok=True)
+    env = None
+    try:
+        env = build_atari_env(config)
+        model = build_naturecnn_dqn_atari_model(
+            config,
+            env,
+            verbose=verbose,
+            device=device,
+            learning_rate=learning_rate,
+            batch_size=batch_size,
+            buffer_size=buffer_size,
+        )
+        model.learn(total_timesteps=total_timesteps)
+        model.save(model_path)
+        metrics = evaluate_atari_model(model, env, n_eval_episodes=eval_episodes)
+        row = {"method": "naturecnn_dqn", **metrics, "model_path": str(model_path)}
+        write_comparison_outputs([row], output_path)
+        return row
     finally:
         close = getattr(env, "close", None)
         if close is not None:

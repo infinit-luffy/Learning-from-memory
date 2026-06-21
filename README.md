@@ -152,6 +152,18 @@ The output directory contains:
 - `runs/alien/full_pipeline/rl/comparison.csv`
 - `runs/alien/full_pipeline/rl/main_vector_dqn.zip`
 
+Run the matched NatureCNN DQN baseline with the same Atari preprocessing and
+RL budget:
+
+```bash
+python scripts/train_atari_dqn_baseline.py \
+  --config configs/atari/alien_sdam_ppo.yaml \
+  --timesteps 5000000 \
+  --eval-episodes 20 \
+  --device cuda \
+  --output-dir runs/alien/naturecnn_dqn_5m
+```
+
 For debugging individual stages, you can still run the environment model
 pretraining or vector DQN training separately:
 

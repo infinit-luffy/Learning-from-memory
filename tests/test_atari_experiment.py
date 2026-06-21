@@ -939,6 +939,23 @@ def test_train_main_vector_dqn_script_help_runs():
     assert "160-D vector observation" in result.stdout
 
 
+def test_train_atari_dqn_baseline_script_help_runs():
+    result = subprocess.run(
+        [sys.executable, "scripts/train_atari_dqn_baseline.py", "--help"],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert "--config" in result.stdout
+    assert "--timesteps" in result.stdout
+    assert "--eval-episodes" in result.stdout
+    assert "--output-dir" in result.stdout
+    assert "--learning-rate" in result.stdout
+    assert "--batch-size" in result.stdout
+    assert "NatureCNN DQN" in result.stdout
+
+
 def test_pretrain_main_env_model_script_help_runs():
     result = subprocess.run(
         [sys.executable, "scripts/pretrain_main_env_model.py", "--help"],
