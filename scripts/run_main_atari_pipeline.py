@@ -24,6 +24,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--env-train-steps", type=int, default=300)
     parser.add_argument("--env-batch-size", type=int, default=128)
     parser.add_argument("--env-learning-rate", type=float, default=3e-4)
+    parser.add_argument("--env-prediction-weight", type=float, default=1.0)
     parser.add_argument("--rl-algo", choices=("dqn", "ppo"), default="dqn")
     parser.add_argument("--timesteps", type=int, default=5000000)
     parser.add_argument("--eval-episodes", type=int, default=20)
@@ -60,6 +61,7 @@ def main() -> None:
         env_batch_size=args.env_batch_size,
         vae_learning_rate=args.vae_learning_rate,
         env_learning_rate=args.env_learning_rate,
+        env_prediction_weight=args.env_prediction_weight,
         rl_learning_rate=args.rl_learning_rate,
         rl_batch_size=args.rl_batch_size,
         rl_buffer_size=args.rl_buffer_size,

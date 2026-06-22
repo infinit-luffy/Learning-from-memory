@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Pretrain the origin/main-style ENV_MODEL_V2 checkpoint used by "
-            "the 160-D Atari vector DQN pipeline."
+            "the 192-D Atari memory-vector RL pipeline."
         )
     )
     parser.add_argument("--config", type=Path, default=Path("configs/atari/alien_sdam_ppo.yaml"))
@@ -21,6 +21,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--train-steps", type=int, default=300)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--learning-rate", type=float, default=3e-4)
+    parser.add_argument("--prediction-weight", type=float, default=1.0)
     parser.add_argument("--device", default="auto")
     parser.add_argument("--dataset-path", type=Path, default=None)
     parser.add_argument("--collect-log-interval", type=int, default=10)
@@ -44,6 +45,7 @@ def main() -> None:
         train_steps=args.train_steps,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
+        prediction_weight=args.prediction_weight,
         device=args.device,
         dataset_path=args.dataset_path,
         collect_log_interval=args.collect_log_interval,

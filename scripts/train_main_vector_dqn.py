@@ -11,7 +11,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
             "Train the origin/main-style Atari agent: frozen pretrained SDAM/VAE "
-            "representation -> 160-D vector observation -> SB3 DQN MlpPolicy."
+            "representation -> 192-D memory vector observation -> SB3 DQN MlpPolicy."
         )
     )
     parser.add_argument("--config", type=Path, default=Path("configs/atari/alien_sdam_ppo.yaml"))

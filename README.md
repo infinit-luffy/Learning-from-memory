@@ -140,8 +140,10 @@ python scripts/run_main_atari_pipeline.py \
 
 This matches the stronger route from `main`: the pretrained VAE/background
 model and transition model are frozen, each Atari frame is converted to a
-160-dimensional vector observation, and Stable-Baselines3 DQN trains an
-`MlpPolicy` on top of that vector state.
+192-dimensional memory vector observation, and Stable-Baselines3 DQN trains an
+`MlpPolicy` on top of that vector state. The vector contains four dynamic
+foreground features, the static-dynamic associative code `z_assoc`, and the
+background latent.
 
 The output directory contains:
 

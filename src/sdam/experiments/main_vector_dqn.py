@@ -325,6 +325,11 @@ class MainEnvModelV2(nn.Module):
         self.bce = nn.BCELoss()
         self.connection_recog = MainAER(hidden_size=hidden_size, input_size=input_size)
         self.feature_recog = MainVanillaVAE(in_channels=1, latent_dim=input_size)
+        self.rssm_predictor = nn.Sequential(
+            nn.Linear(input_size * 2, hidden_size),
+            nn.ReLU(),
+            nn.Linear(hidden_size, input_size),
+        )
 
     def get_feature_encode(self, state: torch.Tensor) -> torch.Tensor:
         mu, log_var = self.feature_recog.encode(state)
@@ -346,19 +351,29 @@ class MainEnvModelV2(nn.Module):
         feature: torch.Tensor,
         org_hat: torch.Tensor,
         org: torch.Tensor,
-    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        pred_next_feature: torch.Tensor,
+        next_feature: torch.Tensor,
+        prediction_weight: float = 1.0,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
         feature_target = feature.clamp(0.0, 1.0)
         org_target = org.clamp(0.0, 1.0)
         recons_feature_loss = self.bce(rec_feature, feature_target)
-        recons_c_org_loss = self.bce(org_hat, org_target)
-        return recons_feature_loss + recons_c_org_loss, recons_feature_loss, recons_c_org_loss
+        recons_c_org_loss = F.mse_loss(org_hat, org_target)
+        next_feature_loss = F.mse_loss(pred_next_feature, next_feature.detach())
+        total = recons_feature_loss + recons_c_org_loss + prediction_weight * next_feature_loss
+        return total, recons_feature_loss, recons_c_org_loss, next_feature_loss
 
     def forward(self, background: torch.Tensor, feature: torch.Tensor, org: torch.Tensor):
-        latent_feature = self.get_feature_encode_train(feature)
+        context_feature = feature[:, :4]
+        next_feature_frame = feature[:, 4]
+        latent_feature = self.get_feature_encode_train(context_feature)
+        mu, log_var = self.feature_recog.encode(next_feature_frame)
+        next_feature = self.feature_recog.reparameterize(mu, log_var)
         rec_feature = self.feature_recog.decode(latent_feature[:, -1, :])
         z = self.connection_recog.encode(latent_feature, background)
         org_hat = self.connection_recog.decode(z)
-        return rec_feature, feature[:, -1], org_hat, org
+        pred_next_feature = self.rssm_predictor(torch.cat([z, latent_feature[:, -1, :]], dim=1))
+        return rec_feature, context_feature[:, -1], org_hat, org, pred_next_feature, next_feature
 
 
 def load_main_vae(
@@ -507,7 +522,9 @@ def collect_main_env_model_dataset(
     with torch.no_grad():
         for episode in range(episodes):
             observation = _unpack_reset(env.reset())
-            feature_deque = deque([torch.zeros(1, 84, 84) for _ in range(3)], maxlen=4)
+            feature_deque = deque([torch.zeros(1, 84, 84) for _ in range(4)], maxlen=5)
+            org_deque = deque(maxlen=5)
+            background_deque = deque(maxlen=5)
             done = False
             while not done:
                 if getattr(env, "num_envs", None):
@@ -525,9 +542,12 @@ def collect_main_env_model_dataset(
                 binary = (frame_input - background > 0.1).float().detach().cpu()[0]
 
                 feature_deque.append(binary)
-                org_samples.append(frame)
-                feature_samples.append(torch.stack(tuple(feature_deque), dim=0))
-                background_samples.append(background_low)
+                org_deque.append(frame)
+                background_deque.append(background_low)
+                if len(feature_deque) == 5 and len(org_deque) == 5 and len(background_deque) == 5:
+                    org_samples.append(org_deque[-2])
+                    feature_samples.append(torch.stack(tuple(feature_deque), dim=0))
+                    background_samples.append(background_deque[-2])
             if logger is not None and log_interval > 0 and (episode + 1) % log_interval == 0:
                 logger(f"[env-pretrain collect] episode={episode + 1}/{episodes} samples={len(org_samples)}")
 
@@ -549,6 +569,7 @@ def train_main_env_model_from_dataset(
     train_steps: int = 300,
     batch_size: int = 128,
     learning_rate: float = 3e-4,
+    prediction_weight: float = 1.0,
     device: str | torch.device = "auto",
     log_interval: int = 100,
     logger: Any | None = None,
@@ -568,9 +589,11 @@ def train_main_env_model_from_dataset(
     background = dataset["background"].float().squeeze(1)
     if org.ndim != 4 or feature.ndim != 5 or background.ndim != 4:
         raise ValueError(
-            "expected dataset shapes org=[N,1,84,84], feature=[N,4,1,84,84], "
+            "expected dataset shapes org=[N,1,84,84], feature=[N,5,1,84,84], "
             f"background=[N,1,60,45]; got {tuple(org.shape)}, {tuple(feature.shape)}, {tuple(background.shape)}"
         )
+    if feature.shape[1] != 5:
+        raise ValueError(f"feature sequence length must be 5, got {feature.shape[1]}")
 
     env_model = MainEnvModelV2(input_size=32, hidden_size=128).to(resolved_device)
     loader = DataLoader(TensorDataset(org, background, feature), batch_size=batch_size, shuffle=False)
@@ -583,12 +606,22 @@ def train_main_env_model_from_dataset(
             org_batch = org_batch.to(resolved_device)
             background_batch = background_batch.to(resolved_device)
             feature_batch = feature_batch.to(resolved_device)
-            rec_feature, feature_target, org_hat, org_target = env_model(background_batch, feature_batch, org_batch)
-            loss, rec_feature_loss, rec_org_loss = env_model.loss_function(
+            (
                 rec_feature,
                 feature_target,
                 org_hat,
                 org_target,
+                pred_next_feature,
+                next_feature,
+            ) = env_model(background_batch, feature_batch, org_batch)
+            loss, rec_feature_loss, rec_org_loss, next_feature_loss = env_model.loss_function(
+                rec_feature,
+                feature_target,
+                org_hat,
+                org_target,
+                pred_next_feature,
+                next_feature,
+                prediction_weight=prediction_weight,
             )
             optimizer.zero_grad()
             loss.backward()
@@ -600,7 +633,8 @@ def train_main_env_model_from_dataset(
                     "[env-pretrain train] "
                     f"step={global_step} loss={last_loss:.6f} "
                     f"feature_loss={float(rec_feature_loss.detach().cpu().item()):.6f} "
-                    f"org_loss={float(rec_org_loss.detach().cpu().item()):.6f}"
+                    f"org_loss={float(rec_org_loss.detach().cpu().item()):.6f} "
+                    f"next_feature_loss={float(next_feature_loss.detach().cpu().item()):.6f}"
                 )
 
     output_path = Path(save_path)
@@ -611,6 +645,7 @@ def train_main_env_model_from_dataset(
     return {
         "checkpoint_path": str(output_path),
         "loss": last_loss,
+        "next_feature_loss": float(next_feature_loss.detach().cpu().item()),
         "train_steps": train_steps,
         "updates": global_step,
         "device": str(resolved_device),
@@ -684,6 +719,7 @@ def pretrain_main_env_model(
     train_steps: int = 300,
     batch_size: int = 128,
     learning_rate: float = 3e-4,
+    prediction_weight: float = 1.0,
     device: str = "auto",
     dataset_path: str | Path | None = None,
     collect_log_interval: int = 10,
@@ -720,6 +756,7 @@ def pretrain_main_env_model(
         train_steps=train_steps,
         batch_size=batch_size,
         learning_rate=learning_rate,
+        prediction_weight=prediction_weight,
         device=resolved_device,
         log_interval=train_log_interval,
         logger=logger,
@@ -830,6 +867,7 @@ def run_main_atari_pipeline(
     env_batch_size: int = 128,
     vae_learning_rate: float = 1e-3,
     env_learning_rate: float = 3e-4,
+    env_prediction_weight: float = 1.0,
     rl_learning_rate: float = 1e-4,
     rl_batch_size: int = 256,
     rl_buffer_size: int = 500000,
@@ -872,6 +910,7 @@ def run_main_atari_pipeline(
         train_steps=env_train_steps,
         batch_size=env_batch_size,
         learning_rate=env_learning_rate,
+        prediction_weight=env_prediction_weight,
         device=device,
         dataset_path=env_dataset_path,
         collect_log_interval=collect_log_interval,
@@ -904,7 +943,7 @@ def run_main_atari_pipeline(
 
 
 class MainVectorObservationWrapper:
-    """Origin/main-style wrapper: Atari frame -> 160-D frozen memory vector."""
+    """Atari frame -> 192-D vector with dynamic features, z_assoc, and static code."""
 
     def __init__(self, env, vae: MainVanillaVAE, env_model: MainEnvModelV2, device: torch.device) -> None:
         gym, spaces = _load_gymnasium()
@@ -916,17 +955,19 @@ class MainVectorObservationWrapper:
                 self.env_model = env_model.eval()
                 self.device = device
                 self.state_background = None
+                self.state_background_low = None
                 self.state_background_latent = None
                 self.feature_deque = deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
                 self.observation_space = spaces.Box(
                     low=-10,
                     high=10,
-                    shape=(160,),
+                    shape=(192,),
                     dtype=np.float32,
                 )
 
             def reset(self, **kwargs):
                 self.state_background = None
+                self.state_background_low = None
                 self.state_background_latent = None
                 self.feature_deque = deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
                 return super().reset(**kwargs)
@@ -937,6 +978,7 @@ class MainVectorObservationWrapper:
                     if self.state_background is None:
                         vae_input = frame_tensor.to(self.device)
                         self.state_background = self.vae.generate(vae_input).cpu()
+                        self.state_background_low = _resize_background(self.state_background).cpu()
                         mu, log_var = self.vae.encode(vae_input.unsqueeze(1))
                         self.state_background_latent = self.vae.reparameterize(mu, log_var).cpu()
                     residual = frame_tensor.cpu() - self.state_background.squeeze(0)
@@ -944,8 +986,12 @@ class MainVectorObservationWrapper:
                     feature = self.env_model.get_feature_encode(binary)[0].detach().cpu().numpy()
                     self.feature_deque.append(feature.astype(np.float32))
                 dynamic = np.stack(self.feature_deque, axis=0).astype(np.float32).reshape(-1)
+                dynamic_tensor = torch.as_tensor(dynamic.reshape(1, 4, 32), dtype=torch.float32, device=self.device)
+                background_low = self.state_background_low.to(self.device)
+                with torch.no_grad():
+                    z_assoc = self.env_model.get_z_encode(dynamic_tensor, background_low)[0].detach().cpu().numpy()
                 background = self.state_background_latent.detach().cpu().numpy().squeeze().astype(np.float32)
-                return np.concatenate([dynamic, background], axis=0).astype(np.float32)
+                return np.concatenate([dynamic, z_assoc.astype(np.float32), background], axis=0).astype(np.float32)
 
         self.wrapper = _Wrapper(env)
 
@@ -954,7 +1000,7 @@ class MainVectorObservationWrapper:
 
 
 class MainVectorVecEnvWrapper:
-    """SB3 VecEnv wrapper: Atari frame observations -> 160-D frozen memory vectors."""
+    """SB3 VecEnv wrapper: Atari frame observations -> 192-D memory vectors."""
 
     def __init__(self, venv, vae: MainVanillaVAE, env_model: MainEnvModelV2, device: torch.device) -> None:
         _, VecEnvWrapper, _ = _load_vec_env_tools()
@@ -967,12 +1013,13 @@ class MainVectorVecEnvWrapper:
             def __init__(self, wrapped_venv):
                 super().__init__(
                     wrapped_venv,
-                    observation_space=spaces.Box(low=-10, high=10, shape=(160,), dtype=np.float32),
+                    observation_space=spaces.Box(low=-10, high=10, shape=(192,), dtype=np.float32),
                 )
                 self.vae = vae
                 self.env_model = env_model
                 self.device = device
                 self.state_backgrounds = [None for _ in range(self.num_envs)]
+                self.state_background_lows = [None for _ in range(self.num_envs)]
                 self.state_background_latents = [None for _ in range(self.num_envs)]
                 self.feature_deques = [
                     deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
@@ -981,6 +1028,7 @@ class MainVectorVecEnvWrapper:
 
             def reset(self):
                 self.state_backgrounds = [None for _ in range(self.num_envs)]
+                self.state_background_lows = [None for _ in range(self.num_envs)]
                 self.state_background_latents = [None for _ in range(self.num_envs)]
                 self.feature_deques = [
                     deque([np.zeros(32, dtype=np.float32) for _ in range(4)], maxlen=4)
@@ -1003,6 +1051,7 @@ class MainVectorVecEnvWrapper:
 
             def _reset_memory(self, index: int) -> None:
                 self.state_backgrounds[index] = None
+                self.state_background_lows[index] = None
                 self.state_background_latents[index] = None
                 self.feature_deques[index] = deque(
                     [np.zeros(32, dtype=np.float32) for _ in range(4)],
@@ -1021,6 +1070,7 @@ class MainVectorVecEnvWrapper:
                     if self.state_backgrounds[index] is None:
                         vae_input = frame_tensor.to(self.device)
                         self.state_backgrounds[index] = self.vae.generate(vae_input).cpu()
+                        self.state_background_lows[index] = _resize_background(self.state_backgrounds[index]).cpu()
                         mu, log_var = self.vae.encode(vae_input.unsqueeze(1))
                         self.state_background_latents[index] = self.vae.reparameterize(mu, log_var).cpu()
                     residual = frame_tensor.cpu() - self.state_backgrounds[index].squeeze(0)
@@ -1028,6 +1078,10 @@ class MainVectorVecEnvWrapper:
                     feature = self.env_model.get_feature_encode(binary)[0].detach().cpu().numpy()
                     self.feature_deques[index].append(feature.astype(np.float32))
                 dynamic = np.stack(self.feature_deques[index], axis=0).astype(np.float32).reshape(-1)
+                dynamic_tensor = torch.as_tensor(dynamic.reshape(1, 4, 32), dtype=torch.float32, device=self.device)
+                background_low = self.state_background_lows[index].to(self.device)
+                with torch.no_grad():
+                    z_assoc = self.env_model.get_z_encode(dynamic_tensor, background_low)[0].detach().cpu().numpy()
                 background = (
                     self.state_background_latents[index]
                     .detach()
@@ -1036,7 +1090,7 @@ class MainVectorVecEnvWrapper:
                     .squeeze()
                     .astype(np.float32)
                 )
-                return np.concatenate([dynamic, background], axis=0).astype(np.float32)
+                return np.concatenate([dynamic, z_assoc.astype(np.float32), background], axis=0).astype(np.float32)
 
         self.wrapper = _Wrapper(venv)
         outer.wrapper = self.wrapper
@@ -1054,7 +1108,10 @@ def load_main_vector_models(
     vae = MainVanillaVAE(in_channels=1, latent_dim=32).to(resolved_device)
     env_model = MainEnvModelV2(input_size=32, hidden_size=128).to(resolved_device)
     vae.load_state_dict(_safe_torch_load(vae_path, map_location=str(resolved_device)))
-    env_model.load_state_dict(_safe_torch_load(env_model_path, map_location=str(resolved_device)))
+    env_model.load_state_dict(
+        _safe_torch_load(env_model_path, map_location=str(resolved_device)),
+        strict=False,
+    )
     vae.eval()
     env_model.eval()
     return vae, env_model, resolved_device

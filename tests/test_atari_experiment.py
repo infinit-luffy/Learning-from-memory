@@ -208,6 +208,9 @@ def test_main_vector_observation_wrapper_outputs_origin_main_vector(monkeypatch)
         def get_feature_encode(self, frame):
             return torch.full((1, 32), 2.0)
 
+        def get_z_encode(self, state, background):
+            return torch.full((1, 32), 3.0)
+
     wrapper = MainVectorObservationWrapper(
         FakeEnv(),
         FakeVAE(),
@@ -217,11 +220,12 @@ def test_main_vector_observation_wrapper_outputs_origin_main_vector(monkeypatch)
 
     vector = wrapper.observation(torch.ones(84, 84, 1).numpy())
 
-    assert vector.shape == (160,)
+    assert vector.shape == (192,)
     assert vector.dtype.name == "float32"
     assert vector[:96].tolist() == [0.0] * 96
     assert vector[96:128].tolist() == [2.0] * 32
-    assert vector[128:].tolist() == [float(index) for index in range(32)]
+    assert vector[128:160].tolist() == [3.0] * 32
+    assert vector[160:].tolist() == [float(index) for index in range(32)]
 
 
 def test_main_vector_env_model_keeps_origin_main_checkpoint_keys():
@@ -306,7 +310,7 @@ def test_collect_main_env_model_dataset_matches_origin_main_shapes():
         def step(self, action):
             self.step_count += 1
             observation = torch.full((1, 84, 84, 1), float(self.step_count))
-            done = self.step_count >= 2
+            done = self.step_count >= 6
             return observation, 0.0, done, {}
 
     class FakeVAE:
@@ -324,7 +328,7 @@ def test_collect_main_env_model_dataset_matches_origin_main_shapes():
     )
 
     assert dataset["org"].shape == (4, 1, 84, 84)
-    assert dataset["feature"].shape == (4, 4, 1, 84, 84)
+    assert dataset["feature"].shape == (4, 5, 1, 84, 84)
     assert dataset["background"].shape == (4, 1, 1, 60, 45)
     assert dataset["feature"].dtype == torch.float32
 
@@ -332,7 +336,7 @@ def test_collect_main_env_model_dataset_matches_origin_main_shapes():
 def test_train_main_env_model_from_dataset_saves_checkpoint(tmp_path):
     dataset = {
         "org": torch.rand(2, 1, 84, 84),
-        "feature": torch.rand(2, 4, 1, 84, 84),
+        "feature": torch.rand(2, 5, 1, 84, 84),
         "background": torch.rand(2, 1, 1, 60, 45),
     }
     save_path = tmp_path / "env_Alien.pth"
@@ -350,6 +354,7 @@ def test_train_main_env_model_from_dataset_saves_checkpoint(tmp_path):
     assert result["checkpoint_path"] == str(save_path)
     assert result["train_steps"] == 1
     assert result["loss"] >= 0.0
+    assert result["next_feature_loss"] >= 0.0
 
 
 def test_atari_module_imports_before_sb3_is_installed(monkeypatch):
@@ -936,7 +941,7 @@ def test_train_main_vector_dqn_script_help_runs():
     assert "--env-model-path" in result.stdout
     assert "--device" in result.stdout
     assert "--batch-size" in result.stdout
-    assert "160-D vector observation" in result.stdout
+    assert "192-D memory vector observation" in result.stdout
 
 
 def test_train_atari_dqn_baseline_script_help_runs():
@@ -969,6 +974,7 @@ def test_pretrain_main_env_model_script_help_runs():
     assert "--save-path" in result.stdout
     assert "--episodes" in result.stdout
     assert "--train-steps" in result.stdout
+    assert "--prediction-weight" in result.stdout
     assert "--device" in result.stdout
 
 
@@ -985,6 +991,7 @@ def test_run_main_atari_pipeline_script_help_runs():
     assert "--vae-train-steps" in result.stdout
     assert "--env-episodes" in result.stdout
     assert "--env-train-steps" in result.stdout
+    assert "--env-prediction-weight" in result.stdout
     assert "--rl-algo" in result.stdout
     assert "dqn" in result.stdout
     assert "ppo" in result.stdout
