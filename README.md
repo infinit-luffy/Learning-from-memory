@@ -42,6 +42,19 @@ This repository implements a research framework for Static-Dynamic Associative M
 
 Default tests do not require Stable-Baselines3, ALE, or Atari ROMs.
 
+### MineRL-style 3D scene prediction
+
+- Offline 3D prediction entrypoint for the reviewer-requested Minecraft-style
+  setting:
+  - `configs/minerl/navigate_sdam_prediction.yaml`
+  - `scripts/train_minerl_sdam_prediction.py`
+- The first implementation uses preprocessed `.pt` shards instead of importing
+  MineRL directly. Each shard is a dictionary with:
+  - `obs`: `[N, T, C, H, W]`, RGB frames in `[0, 1]` or `[0, 255]`
+  - `actions`: `[N, T - 1, action_dim]`
+- The SDAM-3D model predicts next frame, next latent feature, and changed-region
+  mask from a short action-conditioned visual context.
+
 ## Local Test Commands
 
 Create and activate an environment:
@@ -69,6 +82,16 @@ Run synthetic smoke tests:
 ```bash
 python scripts/eval_synthetic.py --config configs/synthetic/sdam.yaml
 python scripts/train_synthetic.py --config configs/synthetic/sdam.yaml --steps 1
+```
+
+Run a MineRL-style prediction smoke test after preparing `.pt` shards:
+
+```bash
+python scripts/train_minerl_sdam_prediction.py \
+  --config configs/minerl/navigate_sdam_prediction.yaml \
+  --train-steps 1000 \
+  --output-dir runs/minerl/navigate_sdam_prediction_smoke \
+  --device cuda
 ```
 
 Run Atari tests that do not need SB3/ROMs:

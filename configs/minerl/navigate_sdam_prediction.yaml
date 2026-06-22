@@ -1,0 +1,21 @@
+data:
+  dataset_path: "data/minerl/navigate_shards"
+  sequence_length: 4
+  image_size: 64
+  channels: 3
+  action_dim: 6
+  change_threshold: 0.05
+model:
+  static_dim: 32
+  dynamic_dim: 32
+  assoc_dim: 48
+  hidden_channels: 16
+training:
+  batch_size: 32
+  learning_rate: 0.0003
+  train_steps: 10000
+  frame_loss_weight: 1.0
+  latent_loss_weight: 1.0
+  change_loss_weight: 0.25
+  recon_loss_weight: 0.1
+  device: "auto"

@@ -314,6 +314,9 @@ def test_collect_main_env_model_dataset_matches_origin_main_shapes():
             return observation, 0.0, done, {}
 
     class FakeVAE:
+        def to(self, device):
+            return self
+
         def eval(self):
             return self
 

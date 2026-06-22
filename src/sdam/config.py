@@ -109,6 +109,43 @@ class AtariSDAMConfig:
     alternating: AtariAlternatingConfig = field(default_factory=AtariAlternatingConfig)
 
 
+@dataclass(frozen=True)
+class MineRLPredictionDataConfig:
+    dataset_path: str
+    sequence_length: int
+    image_size: int
+    channels: int
+    action_dim: int
+    change_threshold: float
+
+
+@dataclass(frozen=True)
+class MineRLPredictionModelConfig:
+    static_dim: int
+    dynamic_dim: int
+    assoc_dim: int
+    hidden_channels: int
+
+
+@dataclass(frozen=True)
+class MineRLPredictionTrainingConfig:
+    batch_size: int
+    learning_rate: float
+    train_steps: int
+    frame_loss_weight: float
+    latent_loss_weight: float
+    change_loss_weight: float
+    recon_loss_weight: float
+    device: str
+
+
+@dataclass(frozen=True)
+class MineRLPredictionConfig:
+    data: MineRLPredictionDataConfig
+    model: MineRLPredictionModelConfig
+    training: MineRLPredictionTrainingConfig
+
+
 def load_config(path: str | Path) -> SDAMConfig:
     config_path = Path(path)
     raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
@@ -172,6 +209,29 @@ def load_atari_config(path: str | Path) -> AtariSDAMConfig:
         alternating=alternating,
     )
     _validate_atari_config(config)
+    return config
+
+
+def load_minerl_prediction_config(path: str | Path) -> MineRLPredictionConfig:
+    config_path = Path(path)
+    raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("config root must be a mapping")
+
+    section_names = ("data", "model", "training")
+    for section in section_names:
+        if section not in raw:
+            raise ValueError(f"missing required section: {section}")
+
+    for section in raw:
+        if section not in section_names:
+            raise ValueError(f"unknown section: {section}")
+
+    data = _load_section("data", raw["data"], MineRLPredictionDataConfig)
+    model = _load_section("model", raw["model"], MineRLPredictionModelConfig)
+    training = _load_section("training", raw["training"], MineRLPredictionTrainingConfig)
+    config = MineRLPredictionConfig(data=data, model=model, training=training)
+    _validate_minerl_prediction_config(config)
     return config
 
 
@@ -304,3 +364,42 @@ def _validate_atari_config(config: AtariSDAMConfig) -> None:
         raise ValueError("alternating.batch_size must be positive")
     if config.alternating.learning_rate <= 0:
         raise ValueError("alternating.learning_rate must be positive")
+
+
+def _validate_minerl_prediction_config(config: MineRLPredictionConfig) -> None:
+    if not config.data.dataset_path.strip():
+        raise ValueError("data.dataset_path must be non-empty")
+    if config.data.sequence_length < 2:
+        raise ValueError("data.sequence_length must be at least 2")
+    if config.data.image_size <= 0:
+        raise ValueError("data.image_size must be positive")
+    if config.data.channels <= 0:
+        raise ValueError("data.channels must be positive")
+    if config.data.action_dim <= 0:
+        raise ValueError("data.action_dim must be positive")
+    if config.data.change_threshold < 0:
+        raise ValueError("data.change_threshold must be non-negative")
+    if config.model.static_dim <= 0:
+        raise ValueError("model.static_dim must be positive")
+    if config.model.dynamic_dim <= 0:
+        raise ValueError("model.dynamic_dim must be positive")
+    if config.model.assoc_dim <= 0:
+        raise ValueError("model.assoc_dim must be positive")
+    if config.model.hidden_channels <= 0:
+        raise ValueError("model.hidden_channels must be positive")
+    if config.training.batch_size <= 0:
+        raise ValueError("training.batch_size must be positive")
+    if config.training.learning_rate <= 0:
+        raise ValueError("training.learning_rate must be positive")
+    if config.training.train_steps <= 0:
+        raise ValueError("training.train_steps must be positive")
+    if config.training.frame_loss_weight < 0:
+        raise ValueError("training.frame_loss_weight must be non-negative")
+    if config.training.latent_loss_weight < 0:
+        raise ValueError("training.latent_loss_weight must be non-negative")
+    if config.training.change_loss_weight < 0:
+        raise ValueError("training.change_loss_weight must be non-negative")
+    if config.training.recon_loss_weight < 0:
+        raise ValueError("training.recon_loss_weight must be non-negative")
+    if not config.training.device.strip():
+        raise ValueError("training.device must be non-empty")
