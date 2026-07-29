@@ -21,17 +21,38 @@ def slot_reconstruction_loss(
 
 
 def slow_temporal_loss(
-    slots_t: torch.Tensor,
-    slots_prev: torch.Tensor,
-    slow_mask: torch.Tensor,
+    slots_t: torch.Tensor,          # (B, K, D)  current slots
+    slots_prev: torch.Tensor,       # (B, K, D)  previous frame slots
+    router_logits: torch.Tensor,    # (B, K, 2)  pre-softmax router logits
+    prior_slow: float = 0.7,
 ) -> torch.Tensor:
-    """Encourage slots routed to 'slow' to be time-invariant.
+    """Router-supervision cross-entropy driven by observed temporal variance.
 
-    slots_t, slots_prev: (B, K, D)
-    slow_mask:           (B, K)   1 where slot is slow.
+    The original formulation ``(slow_mask * diff).sum(-1).mean()`` had a
+    trivial minimum at "all slots routed to fast": since d L / d m_k = diff_k
+    is non-negative, the router had a monotone gradient into the collapse
+    state. Once the Gumbel-Softmax logits saturated (~step 500 empirically),
+    the router was unrecoverable — no reweighting of ``lambda_route`` could
+    escape the flat region because the softmax slope had already vanished.
+
+    Fix: replace with a cross-entropy that supervises the router directly
+    from the empirical temporal variance. Per batch, we compute the
+    ``prior_slow``-th quantile of per-slot squared change; slots below the
+    threshold are the *target* slow class, above are fast. The router's
+    predicted routing is then supervised against that target with CE. The
+    target is detached — router receives clean gradient, and the loss can
+    no longer be gamed by routing everything to one class.
     """
-    diff = (slots_t - slots_prev.detach()).pow(2).sum(dim=-1)  # (B, K)
-    return (slow_mask * diff).sum(dim=-1).mean()
+    with torch.no_grad():
+        diff = (slots_t - slots_prev).pow(2).sum(dim=-1)              # (B, K)
+        thresh = diff.quantile(prior_slow, dim=-1, keepdim=True)      # (B, 1)
+        target_slow = (diff <= thresh).float()                        # (B, K)
+    log_probs = F.log_softmax(router_logits, dim=-1)                  # (B, K, 2)
+    ce = -(
+        target_slow * log_probs[..., 0]
+        + (1.0 - target_slow) * log_probs[..., 1]
+    ).mean()
+    return ce
 
 
 def route_prior_kl(

@@ -38,6 +38,7 @@ class Stage1Config:
     tau_min: float = 0.3
     log_every: int = 50
     ckpt_every: int = 10_000
+    viz_every: int = 5000        # dump slot alpha overlays every N steps
     out_dir: str = "outputs/stage1"
     device: str = "cuda"
     use_wandb: bool = False
@@ -86,11 +87,11 @@ class Stage1Trainer:
         return self.cfg.lr
 
     def _step(self, imgs: torch.Tensor, prev_slots: torch.Tensor | None):
-        """One optimizer step. Return (total loss, dict of components, slots)."""
+        """One optimizer step. Return (total loss, dict of components, slots, alpha)."""
         with torch.no_grad():
             target = self.enc.dino(imgs)                        # (B, N, D)
         slots = self.enc.slot_attn(target)                      # (B, K, D_s)
-        recon, _alpha = self.enc.slot_decoder(slots)
+        recon, alpha = self.enc.slot_decoder(slots)             # alpha: (B, K, N)
         g, logits = self.enc.router(slots)                      # g: (B, K, 2)
         slow_mask = g[..., 0]                                    # (B, K)
 
@@ -100,9 +101,14 @@ class Stage1Trainer:
             "L_div":    slot_diversity_loss(slots),
         }
         if prev_slots is not None:
-            losses["L_slow"] = slow_temporal_loss(slots, prev_slots, slow_mask)
+            # New: pass router logits, not the (gamable) slow_mask.
+            losses["L_slow"] = slow_temporal_loss(
+                slots, prev_slots, logits, prior_slow=self.cfg.route_prior_slow
+            )
         else:
             losses["L_slow"] = slots.new_zeros(())
+        # Router health metric — the observed slow ratio in the batch.
+        losses["slow_ratio"] = slow_mask.mean().detach()
 
         loss = (
             losses["L_slot"]
@@ -110,7 +116,7 @@ class Stage1Trainer:
             + self.cfg.lambda_route * losses["L_route"]
             + self.cfg.lambda_div   * losses["L_div"]
         )
-        return loss, losses, slots
+        return loss, losses, slots, alpha
 
     def fit(self, loader: Iterable[dict]) -> None:
         """Loader yields batches with key ``img`` — a (B,3,H,W) float tensor in [0,1]."""
@@ -136,7 +142,7 @@ class Stage1Trainer:
             for pg in self.optim.param_groups:
                 pg["lr"] = lr_now
 
-            loss, components, slots = self._step(imgs, prev_slots)
+            loss, components, slots, alpha = self._step(imgs, prev_slots)
 
             self.optim.zero_grad(set_to_none=True)
             loss.backward()
@@ -156,6 +162,8 @@ class Stage1Trainer:
                 self._log(step, components, tau_now, lr_now, t0)
             if step and step % self.cfg.ckpt_every == 0:
                 self._save_ckpt(step)
+            if step and step % self.cfg.viz_every == 0:
+                self._save_slot_viz(step, imgs, alpha)
 
             step += 1
 
@@ -179,6 +187,29 @@ class Stage1Trainer:
         print(msg)
         if self._wandb is not None:
             self._wandb.log(summary, step=step)
+
+    # ------------------------------------------------------------------
+
+    # ImageNet stats used by the Stage-1 DataLoader.
+    _NORM_MEAN = (0.485, 0.456, 0.406)
+    _NORM_STD  = (0.229, 0.224, 0.225)
+
+    def _save_slot_viz(self, step: int, imgs: torch.Tensor, alpha: torch.Tensor) -> None:
+        """Dump a slot-alpha overlay grid for the first frame in the batch.
+
+        Import viz lazily so a headless run without matplotlib still trains.
+        """
+        try:
+            from hippoact.utils.viz import save_slot_grid
+        except Exception as e:  # noqa: BLE001
+            print(f"[Stage1] viz disabled ({e}).")
+            return
+        mean = torch.tensor(self._NORM_MEAN, device=imgs.device).view(3, 1, 1)
+        std  = torch.tensor(self._NORM_STD,  device=imgs.device).view(3, 1, 1)
+        img0  = (imgs[0].detach() * std + mean).clamp(0, 1).cpu()      # (3, H, W)
+        a0    = alpha[0].detach().cpu()                                # (K, N)
+        out_p = self.out_dir / f"slots_step{step:07d}.png"
+        save_slot_grid(img0, a0, out_p)
 
     def _save_ckpt(self, step: int, final: bool = False) -> None:
         name = f"ckpt_final.pt" if final else f"ckpt_step{step:07d}.pt"

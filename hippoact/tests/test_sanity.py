@@ -63,18 +63,42 @@ def test_slot_diversity_penalizes_collapse():
     assert l_bad > l_good
 
 
-def test_slow_loss_zero_when_no_slow_slots():
-    slots_t = torch.randn(4, 8, 64)
-    slots_prev = torch.randn(4, 8, 64)
-    slow_mask = torch.zeros(4, 8)
-    assert slow_temporal_loss(slots_t, slots_prev, slow_mask).item() == 0.0
+def test_slow_loss_rewards_router_matching_variance_target():
+    """Router that classifies low-variance → slow and high-variance → fast
+    should score lower than a router that flips those labels."""
+    torch.manual_seed(0)
+    # 8 slots; first 4 static (variance 0), last 4 wildly moving.
+    slots_prev = torch.randn(4, 8, 16)
+    slots_t = slots_prev.clone()
+    slots_t[:, 4:] += 5.0                      # high variance on the last 4
+
+    # 'Good' router: first 4 slow, last 4 fast.
+    good = torch.tensor([[10.0, -10.0]] * 4 + [[-10.0, 10.0]] * 4)
+    good = good.unsqueeze(0).expand(4, -1, -1).contiguous()
+    # 'Bad' router: opposite.
+    bad = torch.tensor([[-10.0, 10.0]] * 4 + [[10.0, -10.0]] * 4)
+    bad = bad.unsqueeze(0).expand(4, -1, -1).contiguous()
+
+    l_good = slow_temporal_loss(slots_t, slots_prev, good, prior_slow=0.5)
+    l_bad  = slow_temporal_loss(slots_t, slots_prev, bad,  prior_slow=0.5)
+    assert l_good.item() < l_bad.item(), f"good {l_good} !< bad {l_bad}"
 
 
-def test_slow_loss_positive_when_slots_change():
-    slots_prev = torch.zeros(4, 8, 64)
-    slots_t = torch.ones(4, 8, 64)
-    slow_mask = torch.ones(4, 8)
-    assert slow_temporal_loss(slots_t, slots_prev, slow_mask).item() > 0.5
+def test_slow_loss_has_no_trivial_all_fast_minimum():
+    """The regression fix: routing everything to fast should NOT minimize
+    the loss when slots actually vary in temporal frequency."""
+    torch.manual_seed(0)
+    slots_prev = torch.zeros(2, 8, 16)
+    slots_t = torch.zeros(2, 8, 16)
+    slots_t[:, 4:] += 1.0                      # last 4 move, first 4 don't
+
+    all_fast = torch.tensor([[-10.0, 10.0]]).expand(2, 8, 2).contiguous()
+    prior_match = torch.zeros(2, 8, 2)         # neutral logits → prior-only
+
+    l_fast = slow_temporal_loss(slots_t, slots_prev, all_fast, prior_slow=0.5)
+    l_neutral = slow_temporal_loss(slots_t, slots_prev, prior_match, prior_slow=0.5)
+    # All-fast should be *worse* than neutral because it mis-labels 4 slots.
+    assert l_fast > l_neutral
 
 
 def test_infonce_returns_zero_without_positive_pairs():

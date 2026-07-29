@@ -136,8 +136,9 @@ python scripts/pretrain_stage1.py \
     --run-name stage1_v1
 ```
 
-Runtime: ~2 hours on **1** A5000 at batch 256, 100 K steps. Run 4 seeds in
-parallel (one per GPU) if you want variance bounds.
+Runtime: ~2 hours on any modern discrete GPU (RTX 4090 / 5080 / A5000 / L40)
+at batch 256, 100 K steps. Run multiple seeds in parallel (one per GPU) if
+you want variance bounds.
 
 ### 4.3 What to watch during training
 
@@ -155,9 +156,9 @@ Common failure signals:
 | Symptom | Diagnosis | Fix |
 |---|---|---|
 | `L_slot` plateaus > 2.0 | slot collapse | raise `lambda_div` to 0.2 |
-| Router puts everything to one class | prior too weak | raise `lambda_route` to 0.2 |
+| Router locks to one class within first ~500 steps | you are on the pre-fix `slow_temporal_loss` (mask-weighted variance sum, has a trivial all-fast minimum) | ``git pull`` — router-supervision CE fixes this |
 | `NaN` in any loss | learning rate spike | lower `stage1_lr` to 1e-4, longer warmup |
-| Slow slot std > 0.3 | `lambda_slow` too weak | raise to 1.0 |
+| `slow_ratio` stuck at 0 or 1 after ~2 K steps | `lambda_slow` too weak relative to `lambda_slot` | raise `lambda_slow` to 1.0 |
 
 ---
 

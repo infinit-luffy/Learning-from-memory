@@ -5,7 +5,7 @@ encoder:
   # Visual backbone
   dino_model: dinov2_vits14      # {dinov2_vits14, dinov2_vitb14}
   image_size: 224
-  patch_size: 14                 # ViT-S/14 → 196 patch tokens
+  patch_size: 14                 # 224 / 14 = 16 → 16×16 = 256 patch tokens
 
   # Slot Attention
   num_slots: 16

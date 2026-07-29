@@ -11,20 +11,38 @@ import torch
 
 
 def overlay_slot_alpha(
-    img: torch.Tensor,          # (3, H, W)  in [0, 1]
-    alpha: torch.Tensor,        # (K, N)      softmax over slot dim
-    grid_h: int = 14,
-    grid_w: int = 14,
-    upsample: int = 16,
+    img: torch.Tensor,                    # (3, H, W)  in [0, 1]
+    alpha: torch.Tensor,                  # (K, N)     softmax over slot dim
+    grid_h: int | None = None,
+    grid_w: int | None = None,
+    upsample: int | None = None,
 ) -> np.ndarray:
-    """Return a numpy array of shape (K, H, W, 3) — original blended per-slot mask."""
+    """Return a numpy array of shape (K, H, W, 3) — original blended per-slot mask.
+
+    grid_h / grid_w default to sqrt(N) (DINOv2 always yields a square grid).
+    upsample defaults to img.height / grid_h so the overlay matches the image.
+    """
+    import math
+
     import torch.nn.functional as F
 
     K, N = alpha.shape
-    assert N == grid_h * grid_w
+    if grid_h is None or grid_w is None:
+        side = int(math.isqrt(N))
+        if side * side != N:
+            raise ValueError(
+                f"non-square patch grid N={N}; pass grid_h/grid_w explicitly"
+            )
+        grid_h = grid_w = side
+    if N != grid_h * grid_w:
+        raise ValueError(f"N={N} does not match grid {grid_h}x{grid_w}")
+    if upsample is None:
+        _, H, _ = img.shape
+        upsample = max(1, H // grid_h)
+
     a = alpha.reshape(K, 1, grid_h, grid_w)
     a = F.interpolate(a, scale_factor=upsample, mode="bilinear", align_corners=False)
-    a = a.squeeze(1)                                         # (K, H, W)
+    a = a.squeeze(1)                                         # (K, H', W')
     a = a / (a.amax(dim=(-1, -2), keepdim=True) + 1e-8)
 
     base = img.permute(1, 2, 0).cpu().numpy()                # (H, W, 3) in [0, 1]
@@ -39,7 +57,10 @@ def overlay_slot_alpha(
 
 
 def save_slot_grid(
-    img: torch.Tensor, alpha: torch.Tensor, out_path: str | Path, upsample: int = 16
+    img: torch.Tensor,
+    alpha: torch.Tensor,
+    out_path: str | Path,
+    upsample: int | None = None,
 ) -> Path:
     """Save an 8×2 grid PNG of slot masks overlaid on the observation."""
     import matplotlib.pyplot as plt
