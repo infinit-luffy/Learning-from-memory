@@ -1,0 +1,30 @@
+__pycache__/
+*.py[cod]
+*.so
+.venv/
+venv/
+env/
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+build/
+dist/
+
+# artifacts / runtime
+outputs/
+logs/
+wandb/
+checkpoints/
+*.pt
+*.pth
+*.ckpt
+
+# data
+data/*
+!data/.gitkeep
+
+# system
+.DS_Store
+.idea/
+.vscode/
+*.swp

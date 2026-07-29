@@ -1,0 +1,63 @@
+# HippoAct default config
+# Values track Table II in the paper §III.
+
+encoder:
+  # Visual backbone
+  dino_model: dinov2_vits14      # {dinov2_vits14, dinov2_vitb14}
+  image_size: 224
+  patch_size: 14                 # ViT-S/14 → 196 patch tokens
+
+  # Slot Attention
+  num_slots: 16
+  slot_dim: 128
+  slot_iters: 3
+  slot_hidden: 256
+
+  # Router
+  router_hidden: 64
+  gumbel_tau_init: 1.0
+  gumbel_tau_min: 0.3
+  gumbel_tau_decay: 0.9995
+  route_prior_slow: 0.7
+
+  # Binding memory
+  binding_layers: 4
+  binding_heads: 4
+  binding_dropout: 0.1
+  proprio_dim: 32                # match your robot
+  c_dim: 128
+  t_window: 4
+
+loss:
+  lambda_slot: 1.0
+  lambda_slow: 0.5
+  lambda_route: 0.05
+  lambda_div: 0.05
+  lambda_predict: 0.5
+  lambda_align: 0.1
+  lambda_swap: 0.3
+  align_eps: 0.05
+  align_tau: 0.1
+
+train:
+  stage1_steps: 100000
+  stage1_lr: 3.0e-4
+  stage1_wd: 1.0e-4
+  batch_size: 256
+  warmup_steps: 2000
+  grad_clip: 20.0
+  device: cuda
+  seed: 0
+  swap_prob: 0.3
+
+safety:
+  quantile: 0.95
+  n_calibration_frames: 500
+
+log:
+  wandb_project: hippoact
+  wandb_entity: null             # set to your entity or leave null for local
+  log_every: 50
+  eval_every: 5000
+  ckpt_every: 10000
+  out_dir: outputs
