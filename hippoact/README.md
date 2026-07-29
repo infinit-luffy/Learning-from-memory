@@ -117,13 +117,33 @@ data/frames/
 └── static_scenes/*.png
 ```
 
-**No real data yet? Generate synthetic frames for a pipeline sanity check:**
+### 4.1.1 Layout choices — clip layout (preferred) vs. flat layout (legacy)
+
+**L_slow is a temporal-variance signal.** For it to be semantically meaningful,
+consecutive samples must be *time-adjacent* frames of the *same scene*. The
+loader auto-detects the layout of `--data-dir`:
+
+- **Clip layout** *(preferred)*: `data-dir/clip_XXX/frame_YYYY.png`. Loader
+  yields `(img_prev, img_t)` pairs from the same clip; slots at the two frames
+  are matched via nearest-neighbor cosine so that per-index temporal diff
+  reflects content change, not permutation drift.
+- **Flat layout** *(legacy)*: `data-dir/*.png`. Loader falls back to using the
+  previous training-iteration's slots as `slots_prev`. Because iterations see
+  unrelated shuffled frames, this signal is semantically weak. A warning is
+  printed. Use only for smoke-testing.
+
+**No real data yet? Generate synthetic clips:**
 ```bash
-python scripts/make_synthetic_data.py --out data/frames/synthetic --n 5000
+python scripts/make_synthetic_data.py --out data/frames/synthetic --n-clips 1250 --clip-len 4
 ```
-5000 varied frames in ~90s. Good enough to verify Stage 1 runs end-to-end
-and loss curves look right; not enough to produce a real representation for
-downstream RL.
+1250 clips × 4 frames = 5000 total frames in ~90s. Each clip has a fixed
+background + rectangle (should be routed slow) and 2-5 moving disks (should
+be routed fast) — a controlled ground truth for L_slow.
+
+Flat mode is still available for compatibility:
+```bash
+python scripts/make_synthetic_data.py --out data/frames/synthetic_flat --flat
+```
 
 ### 4.2 Run
 

@@ -60,4 +60,5 @@ log:
   log_every: 50
   eval_every: 5000
   ckpt_every: 10000
+  viz_every: 2000                # dump slot alpha overlays every N steps (also at step 0)
   out_dir: outputs

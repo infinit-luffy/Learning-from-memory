@@ -28,33 +28,91 @@ from hippoact.training.stage1 import Stage1Config, Stage1Trainer
 from hippoact.utils.config import load_config
 
 
-class ImageDirDataset(Dataset):
-    """Simple recursive image-directory dataset."""
+IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
 
-    IMG_EXT = {".png", ".jpg", ".jpeg", ".webp", ".bmp"}
+
+def _default_transform(image_size: int):
+    return transforms.Compose([
+        transforms.Resize(image_size),
+        transforms.CenterCrop(image_size),
+        transforms.ToTensor(),
+        transforms.Normalize(
+            mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
+        ),
+    ])
+
+
+class ImageDirDataset(Dataset):
+    """Flat image directory. Yields {'img': ...}. Legacy for smoke testing.
+
+    Emits a semantically weak L_slow signal because consecutive iterations see
+    unrelated shuffled frames. Prefer ``ImageClipPairDataset`` for real runs.
+    """
 
     def __init__(self, root: str | Path, image_size: int = 224):
-        self.paths = sorted(
-            [p for p in Path(root).rglob("*") if p.suffix.lower() in self.IMG_EXT]
-        )
+        self.paths = sorted(p for p in Path(root).rglob("*") if p.suffix.lower() in IMG_EXT)
         if not self.paths:
             raise ValueError(f"No images found under {root}")
-        # DINOv2 expects ImageNet-normalized RGB.
-        self.tf = transforms.Compose([
-            transforms.Resize(image_size),
-            transforms.CenterCrop(image_size),
-            transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]
-            ),
-        ])
+        self.tf = _default_transform(image_size)
 
     def __len__(self) -> int:
         return len(self.paths)
 
     def __getitem__(self, idx: int) -> dict:
-        img = Image.open(self.paths[idx]).convert("RGB")
-        return {"img": self.tf(img)}
+        return {"img": self.tf(Image.open(self.paths[idx]).convert("RGB"))}
+
+
+class ImageClipPairDataset(Dataset):
+    """Yield (previous, current) frame pairs from clip subdirectories.
+
+    Root layout:
+        root/
+            clip_000/frame_0000.png, frame_0001.png, ...
+            clip_001/...
+
+    Each subdirectory is one clip; frames are sorted lexicographically. A pair
+    (frame_i, frame_{i+gap}) is emitted for each valid i in each clip.
+    """
+
+    def __init__(self, root: str | Path, image_size: int = 224, gap: int = 1):
+        self.gap = gap
+        self.pairs: list[tuple[Path, Path]] = []
+        for clip_dir in sorted(Path(root).iterdir()):
+            if not clip_dir.is_dir():
+                continue
+            frames = sorted(
+                p for p in clip_dir.iterdir() if p.suffix.lower() in IMG_EXT
+            )
+            for i in range(len(frames) - gap):
+                self.pairs.append((frames[i], frames[i + gap]))
+        if not self.pairs:
+            raise ValueError(
+                f"No frame pairs found under {root}. "
+                f"Expected subdirectories, each with ≥ {gap + 1} frames."
+            )
+        self.tf = _default_transform(image_size)
+
+    def __len__(self) -> int:
+        return len(self.pairs)
+
+    def __getitem__(self, idx: int) -> dict:
+        p_prev, p_cur = self.pairs[idx]
+        return {
+            "img_prev": self.tf(Image.open(p_prev).convert("RGB")),
+            "img_t":    self.tf(Image.open(p_cur).convert("RGB")),
+        }
+
+
+def _looks_like_clip_layout(root: Path) -> bool:
+    """Return True iff root has at least one subdirectory that itself has 2+
+    image files. Otherwise fall back to flat mode.
+    """
+    for p in root.iterdir():
+        if p.is_dir():
+            imgs = [q for q in p.iterdir() if q.suffix.lower() in IMG_EXT]
+            if len(imgs) >= 2:
+                return True
+    return False
 
 
 def build_encoder(cfg) -> HippoActEncoder:
@@ -85,12 +143,28 @@ def main():
     ap.add_argument("--num-workers", type=int, default=4)
     ap.add_argument("--wandb", action="store_true")
     ap.add_argument("--run-name", type=str, default=None)
+    ap.add_argument("--force-flat", action="store_true",
+                    help="Force legacy flat loader even if clip layout detected")
+    ap.add_argument("--pair-gap", type=int, default=1,
+                    help="For clip loader: frame gap between (prev, cur)")
+    ap.add_argument("--viz-every", type=int, default=None,
+                    help="Override log.viz_every from config")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
     encoder = build_encoder(cfg)
 
-    dataset = ImageDirDataset(args.data_dir, image_size=cfg.encoder.image_size)
+    root = Path(args.data_dir)
+    if not args.force_flat and _looks_like_clip_layout(root):
+        dataset = ImageClipPairDataset(root, image_size=cfg.encoder.image_size,
+                                       gap=args.pair_gap)
+        print(f"[Stage1] clip layout detected → paired loader "
+              f"({len(dataset)} (prev,cur) pairs, gap={args.pair_gap})")
+    else:
+        dataset = ImageDirDataset(root, image_size=cfg.encoder.image_size)
+        print(f"[Stage1] flat layout → LEGACY loader ({len(dataset)} frames). "
+              "L_slow signal will be semantically weak; see README §4.1.")
+
     loader = DataLoader(
         dataset,
         batch_size=cfg.train.batch_size,
@@ -100,6 +174,9 @@ def main():
         drop_last=True,
         persistent_workers=args.num_workers > 0,
     )
+
+    viz_every = args.viz_every if args.viz_every is not None \
+                else int(cfg.log.get("viz_every", 5000))
 
     stage1_cfg = Stage1Config(
         steps=cfg.train.stage1_steps,
@@ -115,6 +192,7 @@ def main():
         tau_min=cfg.encoder.gumbel_tau_min,
         log_every=cfg.log.log_every,
         ckpt_every=cfg.log.ckpt_every,
+        viz_every=viz_every,
         out_dir=cfg.log.out_dir + "/stage1",
         device=cfg.train.device,
         use_wandb=args.wandb,
@@ -124,8 +202,8 @@ def main():
     )
 
     trainer = Stage1Trainer(encoder, stage1_cfg)
-    print(f"[Stage1] dataset: {len(dataset)} frames | steps: {stage1_cfg.steps}")
-    print(f"[Stage1] DINOv2 mock={encoder.dino.is_mock}")
+    print(f"[Stage1] steps: {stage1_cfg.steps} | viz_every: {stage1_cfg.viz_every} "
+          f"| DINOv2 mock={encoder.dino.is_mock}")
     trainer.fit(loader)
 
 

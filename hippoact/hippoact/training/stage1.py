@@ -21,6 +21,7 @@ from hippoact.losses import (
     slot_reconstruction_loss,
     slow_temporal_loss,
 )
+from hippoact.utils.slot_matching import match_slots_nn
 
 
 @dataclass
@@ -86,28 +87,60 @@ class Stage1Trainer:
             return self.cfg.lr * (step + 1) / max(1, self.cfg.warmup_steps)
         return self.cfg.lr
 
-    def _step(self, imgs: torch.Tensor, prev_slots: torch.Tensor | None):
-        """One optimizer step. Return (total loss, dict of components, slots, alpha)."""
-        with torch.no_grad():
-            target = self.enc.dino(imgs)                        # (B, N, D)
-        slots = self.enc.slot_attn(target)                      # (B, K, D_s)
+    def _step(self, batch: dict, prev_slots_xiter: torch.Tensor | None):
+        """One optimizer step. Return (total loss, dict of components, slots, alpha).
+
+        Accepts two batch formats:
+          * paired  {"img_t": ..., "img_prev": ...}  — proper temporal supervision;
+                    slots at t and t-gap are matched via NN before the slow loss.
+          * legacy  {"img": ...}                     — falls back to using the
+                    slots from the previous iteration as ``slots_prev``. This is
+                    semantically weak (unrelated images across iterations) and
+                    is only kept for backward compatibility. A warning is issued
+                    once per training run.
+        """
+        paired = "img_t" in batch and "img_prev" in batch
+        if paired:
+            imgs_t   = batch["img_t"].to(self.device, non_blocking=True)
+            imgs_prev = batch["img_prev"].to(self.device, non_blocking=True)
+            with torch.no_grad():
+                target_t    = self.enc.dino(imgs_t)
+                target_prev = self.enc.dino(imgs_prev)
+            slots      = self.enc.slot_attn(target_t)
+            slots_prev = self.enc.slot_attn(target_prev)
+            # Match slot identity via cosine NN so that per-index diff reflects
+            # content change, not permutation drift.
+            prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
+            target = target_t
+        else:
+            if not getattr(self, "_warned_flat", False):
+                print("[Stage1] WARNING: legacy flat-image loader detected. "
+                      "L_slow will supervise on a semantically weak signal "
+                      "(cross-iteration slots of unrelated shuffled frames). "
+                      "For a real Stage-1 run, use the clip loader "
+                      "(see README §4.1).")
+                self._warned_flat = True
+            imgs_t = batch["img"].to(self.device, non_blocking=True)
+            with torch.no_grad():
+                target = self.enc.dino(imgs_t)
+            slots = self.enc.slot_attn(target)
+            prev_for_slow = prev_slots_xiter
+
         recon, alpha = self.enc.slot_decoder(slots)             # alpha: (B, K, N)
         g, logits = self.enc.router(slots)                      # g: (B, K, 2)
-        slow_mask = g[..., 0]                                    # (B, K)
+        slow_mask = g[..., 0]
 
         losses = {
             "L_slot":   slot_reconstruction_loss(recon, target),
             "L_route":  route_prior_kl(logits, prior_slow=self.cfg.route_prior_slow),
             "L_div":    slot_diversity_loss(slots),
         }
-        if prev_slots is not None:
-            # New: pass router logits, not the (gamable) slow_mask.
+        if prev_for_slow is not None:
             losses["L_slow"] = slow_temporal_loss(
-                slots, prev_slots, logits, prior_slow=self.cfg.route_prior_slow
+                slots, prev_for_slow, logits, prior_slow=self.cfg.route_prior_slow
             )
         else:
             losses["L_slow"] = slots.new_zeros(())
-        # Router health metric — the observed slow ratio in the batch.
         losses["slow_ratio"] = slow_mask.mean().detach()
 
         loss = (
@@ -116,18 +149,21 @@ class Stage1Trainer:
             + self.cfg.lambda_route * losses["L_route"]
             + self.cfg.lambda_div   * losses["L_div"]
         )
-        return loss, losses, slots, alpha
+        # Return imgs_t so viz callback can dump the current-frame overlay.
+        return loss, losses, slots, alpha, imgs_t
 
     def fit(self, loader: Iterable[dict]) -> None:
-        """Loader yields batches with key ``img`` — a (B,3,H,W) float tensor in [0,1]."""
+        """Train from a dataloader that yields either paired or flat batches.
+
+        Paired (preferred): dict with keys ``img_t`` and ``img_prev``.
+        Flat  (legacy):     dict with key  ``img``.  Warns once.
+        """
         self.enc.train()
         step = 0
         prev_slots: torch.Tensor | None = None
         t0 = time.time()
 
-        # Endlessly cycle the loader.
         loader_iter = iter(loader)
-
         while step < self.cfg.steps:
             try:
                 batch = next(loader_iter)
@@ -135,14 +171,11 @@ class Stage1Trainer:
                 loader_iter = iter(loader)
                 batch = next(loader_iter)
 
-            imgs = batch["img"].to(self.device, non_blocking=True)
-
-            # LR warmup.
             lr_now = self._lr_at(step)
             for pg in self.optim.param_groups:
                 pg["lr"] = lr_now
 
-            loss, components, slots, alpha = self._step(imgs, prev_slots)
+            loss, components, slots, alpha, imgs_used = self._step(batch, prev_slots)
 
             self.optim.zero_grad(set_to_none=True)
             loss.backward()
@@ -152,18 +185,19 @@ class Stage1Trainer:
             )
             self.optim.step()
 
-            # Anneal Gumbel temperature every step.
             tau_now = self.enc.anneal_router(
                 factor=self.cfg.tau_anneal_factor, tau_min=self.cfg.tau_min
             )
+            # Only used in legacy flat mode; harmless in paired mode.
             prev_slots = slots.detach()
 
             if step % self.cfg.log_every == 0:
                 self._log(step, components, tau_now, lr_now, t0)
             if step and step % self.cfg.ckpt_every == 0:
                 self._save_ckpt(step)
-            if step and step % self.cfg.viz_every == 0:
-                self._save_slot_viz(step, imgs, alpha)
+            # Dump slot viz at step 0 too (baseline) and every viz_every after.
+            if step % self.cfg.viz_every == 0:
+                self._save_slot_viz(step, imgs_used, alpha)
 
             step += 1
 
