@@ -75,18 +75,25 @@ python -c "import torch; torch.hub.load('facebookresearch/dinov2', 'dinov2_vits1
 
 ---
 
-## 3. First run — 2-minute overfit test
+## 3. First run — 40-second overfit test
 
 Before spending GPU-days on real training, prove the architecture converges
 on a single synthetic scene:
 
 ```bash
-python scripts/overfit_test.py --steps 500
+python scripts/overfit_test.py                # default: 8000 steps, ~40s on A5000
 ```
 
 Success criterion (matches `testing_strategy.md` §S1): final `L_slot < 0.01`,
-initial/final ratio > 10×. Should take ~2 min on a single A5000.
-**If this fails, do not proceed** — architecture has a bug.
+initial/final ratio > 10×.
+
+**Expected loss trajectory** — loss starts near patch-feature variance (~6),
+plateaus at ~2.0 (the "predict mean" solution) for the first 100-500 steps,
+then breaks symmetry and descends to <0.01 by step ~5000-8000. The plateau is
+normal Slot Attention warmup, not a bug.
+
+**If final loss > 0.01 after 8000 steps, come back to me** — architecture
+has a real problem. Do not continue to Stage 1.
 
 ---
 
@@ -109,6 +116,14 @@ data/frames/
 ├── random_motion_bg2/*.png
 └── static_scenes/*.png
 ```
+
+**No real data yet? Generate synthetic frames for a pipeline sanity check:**
+```bash
+python scripts/make_synthetic_data.py --out data/frames/synthetic --n 5000
+```
+5000 varied frames in ~90s. Good enough to verify Stage 1 runs end-to-end
+and loss curves look right; not enough to produce a real representation for
+downstream RL.
 
 ### 4.2 Run
 

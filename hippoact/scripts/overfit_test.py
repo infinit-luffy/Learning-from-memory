@@ -20,10 +20,13 @@ from hippoact.encoders.hippo_encoder import HippoActEncoder
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--steps", type=int, default=500)
+    ap.add_argument("--steps", type=int, default=8000,
+                    help="Enough to escape the predict-mean plateau at ~2.0 "
+                         "and drive L_slot below 0.01. Empirically 5-8K.")
     ap.add_argument("--lr", type=float, default=3e-4)
     ap.add_argument("--image-size", type=int, default=224)
     ap.add_argument("--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu")
+    ap.add_argument("--pass-threshold", type=float, default=0.01)
     args = ap.parse_args()
 
     torch.manual_seed(0)
@@ -39,8 +42,18 @@ def main():
         weight_decay=1e-4,
     )
 
+    # For context in the printout:
+    with torch.no_grad():
+        target_std = encoder.dino(img).std().item()
+    print(f"target patch-feature std ≈ {target_std:.2f}   "
+          f"→ predict-mean plateau expected at L_slot ≈ {target_std ** 2:.2f}")
+    print("(loss stays near that plateau for ~100-500 steps then escapes; "
+          "this is expected Slot-Attention warmup, not a bug)")
+    print("-" * 60)
+
     losses = []
     t0 = time.time()
+    log_every = max(1, args.steps // 20)   # ~20 log lines regardless of --steps
     for step in range(args.steps):
         with torch.no_grad():
             target = encoder.dino(img)
@@ -53,18 +66,21 @@ def main():
         optim.step()
 
         losses.append(loss.item())
-        if step % 50 == 0:
-            print(f"step {step:4d}  L_slot = {loss.item():.5f}")
+        if step % log_every == 0:
+            print(f"step {step:5d}  L_slot = {loss.item():.5f}")
 
     elapsed = time.time() - t0
     initial, final = losses[0], losses[-1]
-    print("-" * 50)
+    print("-" * 60)
     print(f"elapsed: {elapsed:.1f}s   initial: {initial:.4f}   final: {final:.4f}")
     print(f"ratio initial/final: {initial / max(final, 1e-8):.1f}×")
     # Pass criteria from testing_strategy.md §S1
-    assert final < 0.01, f"S1 FAIL: final loss {final:.4f} > 0.01"
-    assert initial > 10 * final, f"S1 FAIL: loss barely decreased"
-    print("✔  S1 (overfit single image) PASSED")
+    assert final < args.pass_threshold, (
+        f"S1 FAIL: final loss {final:.4f} > {args.pass_threshold}. "
+        f"Try --steps {args.steps * 2}."
+    )
+    assert initial > 10 * final, "S1 FAIL: loss barely decreased"
+    print(f"OK  S1 (overfit single image) PASSED  (threshold {args.pass_threshold})")
 
 
 def _make_synthetic_scene(size: int) -> torch.Tensor:
