@@ -77,7 +77,8 @@ def _paint_rect(img: np.ndarray, rect) -> np.ndarray:
 
 
 def make_clip(size: int, rng: np.random.Generator, clip_len: int,
-              disk_speed: float = 12.0) -> list[np.ndarray]:
+              disk_speed: float = 12.0,
+              min_radius: int = 8, max_radius: int = 22) -> list[np.ndarray]:
     """Return a list of ``clip_len`` frames with:
       - background: fixed across the clip (should be routed slow)
       - rectangle 'gripper base': fixed across the clip (should be slow)
@@ -106,7 +107,7 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int,
     velocities = []
     for _ in range(n_disks):
         cx, cy = rng.integers(30, size - 30, size=2)
-        r = int(rng.integers(8, 22))
+        r = int(rng.integers(min_radius, max_radius))
         col = rng.random(3)
         disks_init.append([float(cx), float(cy), r, col])
         vx, vy = rng.normal(0.0, disk_speed, size=2)
@@ -126,9 +127,11 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int,
 
 
 def make_frame(size: int, rng: np.random.Generator,
-               disk_speed: float = 12.0) -> np.ndarray:
+               disk_speed: float = 12.0,
+               min_radius: int = 8, max_radius: int = 22) -> np.ndarray:
     """Return a single scene (no temporal structure) — used only by --flat."""
-    return make_clip(size, rng, clip_len=1, disk_speed=disk_speed)[0]
+    return make_clip(size, rng, clip_len=1, disk_speed=disk_speed,
+                     min_radius=min_radius, max_radius=max_radius)[0]
 
 
 def main():
@@ -143,6 +146,11 @@ def main():
                     help="std of per-frame disk velocity in pixels. "
                          "Default 12 ≈ 1 DINOv2 patch/frame; previous 3.0 "
                          "was below patch quantization threshold.")
+    ap.add_argument("--min-radius", type=int, default=8,
+                    help="min disk radius (px). For intersection-mask "
+                         "diagnostics use >= 14 so displacement < diameter "
+                         "and motion(t-1,t) ∩ motion(t,t+1) stays non-empty.")
+    ap.add_argument("--max-radius", type=int, default=22)
     ap.add_argument("--flat", action="store_true",
                     help="Legacy: dump all frames flat into --out (no temporal structure)")
     args = ap.parse_args()
@@ -154,7 +162,8 @@ def main():
     if args.flat:
         total = args.n_clips * args.clip_len
         for i in range(total):
-            frame = make_frame(args.size, rng, disk_speed=args.disk_speed)
+            frame = make_frame(args.size, rng, disk_speed=args.disk_speed,
+                               min_radius=args.min_radius, max_radius=args.max_radius)
             Image.fromarray((frame * 255).astype(np.uint8)).save(
                 out / f"frame_{i:06d}.png"
             )
@@ -167,7 +176,8 @@ def main():
             clip_dir = out / f"clip_{c:06d}"
             clip_dir.mkdir(exist_ok=True)
             for t, frame in enumerate(
-                make_clip(args.size, rng, args.clip_len, disk_speed=args.disk_speed)
+                make_clip(args.size, rng, args.clip_len, disk_speed=args.disk_speed,
+                          min_radius=args.min_radius, max_radius=args.max_radius)
             ):
                 Image.fromarray((frame * 255).astype(np.uint8)).save(
                     clip_dir / f"frame_{t:04d}.png"

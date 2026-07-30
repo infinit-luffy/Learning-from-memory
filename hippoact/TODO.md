@@ -3,135 +3,145 @@
 > 本文件是服务器上 Claude Code agent 的**权威任务清单**。按顺序执行，每步有明确判据。
 > 规则：判据不过 → **停下来，把数据带回 cowork 会话**，不要自行改 loss / 架构 / 判据。
 > 可以自行修的：环境问题、依赖、路径、显存、数据生成参数复跑。
-> 最后更新：2026-07-30（CP5g 之后）
+> 最后更新：2026-07-30（TODO_RESULT Step 1 之后 — P1/P2 判决已消化）
 
 ---
 
 ## 当前状态快照
 
-- 分支：`hippoact`，HEAD = `c05a2f3` (cp5g)
-- 已完成：CP1-4 ✅；CP5 系列已诊断 6 层 bug（详见 git log cp5 → cp5g）
-- 最新结论：raw carryover 保 tracking (0.65) 但毁 localization (0.20)；
-  slot_iters 5 和 slot_dim 192 两个 lever 均无效 → 根因是 localization 是
-  fresh-init 竞争的涌现产物，carryover 拆掉了该机制
-- 手头 checkpoint：carryover-trained（用于下面 P1-P3 probe）
-- 现有诊断脚本（scratchpad）：target_compare.py, anchor_check.py,
-  savi_probe.py, ab_eval.py, decomp_check.py, validate_semantics.py
+- 分支：`hippoact`，最新 = cp5g + TODO_RESULT
+- **Step 1 判决（TODO_RESULT.md）**：P1 = 权重损害（fresh init 也只有 0.189）；
+  P2 = 矩匹配 no-op（on-object 差值 0.000）→ carryover_norm 训练**永久取消**
+- **两个关键新事实**：
+  1. tracking / localization 在权重层面守恒——三个配置严格反向，同一模块
+     无法同时做定位与跨帧绑定（§IV.I negative result 素材）
+  2. 绑定是训练瞬态，峰值随容量前移然后被 L_slot 吃掉 → **checkpoint 不能按
+     重建 loss 选，必须按 tracking 指标选**
+- 手头 checkpoint：shared-init 训练版（定位 0.510，最好的定位性能）+ carryover 系列
+- 诊断脚本（scratchpad）：step1_probes / track_check / redundancy_check /
+  binding_check / anchor_check / target_compare / validate_semantics /
+  savi_probe / decomp_check / inversion_check / ab_eval
 
 ---
 
-## Step 1 — 三个 eval-only probe（无需训练，~2 分钟总计）
+## 方向变化说明（先读这个）
 
-用 **carryover-trained checkpoint**，全部现有 API（`sample_init()` / `slots_init` 参数）：
+P1/P2 判决否掉了"init 侧修复"整条路线。新路线基于 TODO_RESULT 的守恒发现：
 
-### P1：权重 vs init 归因
-单帧 eval，用 `slot_attn.sample_init(B)` fresh init，测 on-object 比例。
+**不再让 Slot Attention 学跨帧绑定。编码器只做它擅长的定位（shared init，
+0.510），跨帧 identity 改为事后计算——Tracking-by-Matching。**
 
-| 结果 | 含义 |
-|---|---|
-| on-object 恢复到 ~0.4-0.5 | 权重没坏，问题纯在 init 分布 → 继续 P2 |
-| 仍 ~0.2 | carryover 训练损害了编码器 → **停，带 P1/P2/P3 数字回 cowork** |
-
-### P2：矩匹配假设（决定性实验）
-Eval 时把 prev 输出 slot 标准化后映回 init 流形再当 init：
-```python
-z = (prev - prev.mean(-1, keepdim=True)) / (prev.std(-1, keepdim=True) + 1e-6)
-init = slot_attn.slots_mu + slot_attn.slots_logsigma.exp() * z
-slots_cur = slot_attn(feats_cur, slots_init=init)
-```
-同时测 on-object **和** tracking consistency（用修正后的交集 motion mask：
-`motion(t-1,t) ∩ motion(t,t+1)`）。
-
-| 结果 | 行动 |
-|---|---|
-| on-object 恢复 ≥0.4 且 tracking ≥0.6 | → **Step 2**（训 carryover_norm） |
-| on-object 恢复但 tracking 掉 <0.55 | 矩匹配破坏 identity → 停，回 cowork |
-| on-object 不恢复 | init 流形比一二阶矩复杂 → 停，回 cowork（下一步是 SAVi-lite predictor，cowork 出） |
-
-### P3：测试时迭代 sweep
-Eval 时 `slot_attn.iters = 3 / 5 / 8` 对比 on-object。
-仅作参考数据（区分预算 vs 吸引子），不阻塞流程，跑完记录。
+理由：
+- 守恒关系说明单模块两任务在此规模是结构冲突，SAVi-lite predictor 仍是
+  "让网络学 identity"，有重蹈权重损害的风险，降级为 fallback
+- Binding Transformer 是 attention over set，对 slot index 不敏感，Stage 2
+  不依赖编码器自身的跨帧绑定
+- Matching 是 eval-only 可验证的——又一次"训练前先量"
 
 ---
 
-## Step 2 — 训 carryover_norm（仅当 P2 通过）
+## Step M1 — Tracking-by-Matching probe（eval-only，无训练）
 
+用 **shared-init checkpoint**（定位 0.510 那个）：
+
+1. 相邻两帧独立编码（fresh init 各自收敛——注意**不要**共享 init，那会
+   冻结分区；我们现在要的是每帧各自最好的定位）
+2. 跨帧 slot 配对用 Hungarian（scipy.optimize.linear_sum_assignment）：
+   ```
+   cost[i, j] = -(w_iou * IoU(alpha_prev[i], alpha_cur[j])
+                  + w_feat * cosine(slot_prev[i], slot_cur[j]))
+   先试 w_iou=0.7, w_feat=0.3；alpha IoU 用 top-16 patch 二值化后算
+   ```
+3. 配对后测两件事：
+   - **matched tracking**：配对 slot 的 alpha centroid 位移 vs 物体真实位移
+     的方向一致性（交集掩膜，track_check.py 的判据）
+   - **localization 保持**：on-object 比例应仍 ≈ 0.510（编码器没动，理论上
+     必然保持，测一下当 sanity）
+
+**数据**：重新生成大圆盘诊断集消掉 46/150 的样本瓶颈：
 ```bash
-git pull   # 拿到 cp5g（slot_init_mode: carryover_norm 已实现）
-cd hippoact
-python -c "
-import yaml
-c = yaml.safe_load(open('configs/default.yaml'))
-c['train']['slot_init_mode'] = 'carryover_norm'
-c['loss']['lambda_slow'] = 0.0        # content diff 在 carryover 下是反信号，保持关闭
-c['encoder']['slot_iters'] = 3        # 回到 3，iters=5 已证明无效，别混变量
-yaml.dump(c, open('configs/carryover_norm.yaml', 'w'))
-"
-python scripts/pretrain_stage1.py --config configs/carryover_norm.yaml \
-    --data-dir data/frames/synthetic --wandb --run-name stage1_cp5g_carryover_norm
+git pull   # 拿到 --min-radius 参数
+python scripts/make_synthetic_data.py --out data/frames/synthetic_diag \
+    --min-radius 14 --max-radius 26 --n-clips 400
+# 直径 ≥28px > 位移 ~15-20px → 交集掩膜非空，有效样本应 >300 clips
 ```
 
-训练中每 2000 步 checkpoint 跑判据（on-object + tracking，修正版 motion mask）。
+### 判据
 
-### 通过判据（两条同时满足才算过）
-- tracking consistency 峰值 ≥ 0.60
-- on-object > 2.0 slot 比例 ≥ 0.35
+| matched tracking | localization | 结论 → 行动 |
+|---|---|---|
+| **≥ 0.60** | ≥ 0.45 | **Matching 路线成立** → Step M2 |
+| 0.45–0.60 | ≥ 0.45 | 部分成立 → 调 w_iou/w_feat 和 IoU 二值化阈值，一轮内重测；仍不过 → 停，回 cowork |
+| < 0.45 | — | Matching 不足以恢复 identity → 停，回 cowork（SAVi-lite predictor 讨论） |
 
-| 结果 | 行动 |
-|---|---|
-| 两条都过 | → **Step 3** |
-| tracking 过、on-object 不过 | 停，回 cowork（该上 SAVi-lite predictor） |
-| tracking 不过 | 矩匹配在训练动态下破坏 identity → 停，回 cowork |
-
----## Step 3 — L_slow target 换成 alpha displacement（cowork 出 patch）
-
-**不要自己实现**。Step 2 过了之后回 cowork 报数，cowork 会出：
-- `slow_signal: {content_diff, alpha_displacement}` config
-- alpha centroid 位移计算 + 分位数归一化 BCE
-- 对应 sanity test
-
-原因：content diff 与 motion 在 carryover 下负相关（-0.379，CP5e 实测），
-tracking slot 的特征恰恰稳定。alpha 位移才是正确的"fast"信号。
-
-拿到 patch 后重训 + 判据：
-- **Cohen's d ≥ 1.0**（用修正版 motion mask + oracle 对照校准）
-- slot alpha 图有可见分工（≥2 slot 追 disk，≥3 slot 稳定覆盖背景）
-
-| 结果 | 行动 |
-|---|---|
-| d ≥ 1.0 | **synthetic phase 正式关闭** → Step 4 |
-| d < 1.0 | 停，回 cowork，带全套数字做 synthetic 终审 |
+**顺带记录**：配对的 assignment 稳定性（相邻 pair 之间同一物体是否连续同一
+slot 链），这决定 Stage 2 的时间窗 T=4 里 identity 链能不能连起来。
 
 ---
 
-## Step 4 — Phase 2：DMC + Distracting Control Suite（cowork 主导）
+## Step M2 — alpha displacement 作为 L_slow target（cowork 出 patch）
 
-Synthetic 关闭后回 cowork，那边会给：
-1. TD-MPC2 fork 集成方案（我们的 encoder 替换 h_phi）
+M1 过了以后**回 cowork 报数**，cowork 出 patch：
+- matching 工具函数正式化（从你的 probe 脚本整理进 hippoact/utils/）
+- `slow_signal: alpha_displacement` ——配对 slot 的 centroid 位移经分位数
+  归一化后作为 router 的 BCE target
+- 训练循环里 matching 在 no_grad 下做，per-batch 开销 ~ms 级
+
+然后重训 shared-init + 新 target（**编码器训练方式完全不变**，只换 router
+的监督信号），判据：
+
+- **Cohen's d ≥ 1.0**（validate_semantics.py，oracle/uniform 对照先跑）
+- slot alpha 图可见分工
+- `slow_ratio` 健康（0.6-0.9 区间，argmax/gumbel gap < 0.05）
+
+| 结果 | 行动 |
+|---|---|
+| d ≥ 1.0 | **synthetic phase 正式关闭** → Step P2（Phase 2） |
+| d < 1.0 | 停，回 cowork 做 synthetic 终审（此时诊断链已完整，直接终审而不是继续迭代） |
+
+---
+
+## Step P2 — Phase 2：DMC + Distracting Control Suite（cowork 主导）
+
+Synthetic 关闭后回 cowork，那边给：
+1. TD-MPC2 fork 集成方案（encoder 替换 h_phi；checkpoint 选择规则要按
+   tracking 指标不是 L_slot——TODO_RESULT 的瞬态发现）
 2. DCS env wrapper
 3. walker-walk 单任务跑通判据
 
-**先不要自己搭**——TD-MPC2 的接口对接有几个坑（replay buffer 格式、
-proprio 拼接、eval 协议），cowork 那边有完整设计文档（docs/ 目录）。
+**先不要自己搭。**
+
+---
+
+## 挂账清单（不阻塞主线，有空处理）
+
+- [ ] `docs/paper_section_IV_experiments.md` §IV.E.1 "196 patch grid" → 256
+      （`docs/paper_section_III_method.md` §III.C 的 "N = 196" 同样要改；
+      这个数字错误当初引发过 viz.py 的 AssertionError，不是无害笔误）
+- [ ] `docs/paper_section_III_method.md` §III.D.3 还是 pre-CP5 的旧公式，
+      等 M2 定型后 cowork 统一重写（会包含守恒发现 + matching 设计）
+- [ ] 论文 §IV.I negative result：tracking/localization 权重守恒 + 绑定瞬态，
+      素材已在 TODO_RESULT.md §4-5，cowork 写作时直接引用
 
 ---
 
 ## 常备规则（每一步都适用）
 
-1. **训练前先量数据**：任何新数据/新 target，先用 target_compare.py 测相关性，
-   corr < 0.5 不启动训练
+1. **训练前先量数据**：新数据/新 target 先测相关性或 eval-only probe，
+   信号不足不启动训练
 2. **单变量原则**：一次只改一个 knob，改前记录 baseline
 3. **判据前置**：跑之前写下预期数字，跑完对照
-4. **度量卫生**：motion mask 用交集定义；新度量先跑 oracle/uniform 正负对照
-5. **卡住就带数据回 cowork**，不要在服务器上即兴改方法——之前 6 层 bug
-   每层都是"看起来能自己修"但根因在别处
+4. **度量卫生**：motion mask 用交集定义 `motion(t-1,t) ∩ motion(t,t+1)`；
+   新度量先跑 oracle/uniform 正负对照
+5. **checkpoint 按 tracking 指标选，不按 L_slot**（绑定是瞬态）
+6. **卡住就带数据回 cowork**，不要在服务器上即兴改方法
 
 ## 汇报格式（回 cowork 时带上）
 
 ```
 Step N 结果：
 - 判据对照表（预期 vs 实测）
-- 关键数字：on-object / tracking / Cohen's d / corr
+- 关键数字：matched tracking / localization / Cohen's d / assignment 稳定性
 - 异常观察（如有）
 - 卡在哪一条判据（如卡住）
 ```
