@@ -8,9 +8,11 @@
 
 We consider vision-based robot control formulated as a partially observable Markov decision process (POMDP)  ⟨𝒮, 𝒜, 𝒪, T, R, γ⟩. At each time step *t*, the robot receives a visual observation **O**<sub>t</sub> ∈ ℝ<sup>H×W×3</sup> from a wrist- or third-person RGB camera and a proprioceptive vector **q**<sub>t</sub> ∈ ℝ<sup>d<sub>q</sub></sup> containing joint positions, joint velocities, and end-effector 6-D pose. The agent selects a continuous action **a**<sub>t</sub> ∈ ℝ<sup>d<sub>a</sub></sup> and receives a scalar reward *r*<sub>t</sub>. The goal is to learn a policy π : (𝒪, 𝒬)<sup>*</sup> → 𝒜 that maximizes 𝔼[Σ γ<sup>t</sup> *r*<sub>t</sub>] under the mild distribution shift induced by (i) background changes (table cloth, lighting, distractors) and (ii) embodiment-level differences between simulation and the real robot.
 
-**Design premise.** Robot manipulation scenes decompose naturally into three components: (a) *slow* background structure that changes little across an episode (table, fixtures, arm base); (b) *fast* foreground content (target objects, gripper); and (c) the agent's own proprioceptive state, which is a privileged low-dimensional signal that is always accurate and background-invariant. The prevailing approach — encoding pixels end-to-end with a CNN or ViT — forces the encoder to spend capacity re-representing (a) at every frame and provides no clean interface to fuse (c). We instead build a representation in which (a), (b), and (c) are *explicitly disentangled at the feature level* and then re-bound through a compact associative memory before being fed to a downstream planner.
+**Design premise.** Robot manipulation scenes decompose naturally into three components: (a) background structure that is task-irrelevant within an episode (table, fixtures, arm base); (b) foreground content the policy must act on (target objects, gripper); and (c) the agent's own proprioceptive state, a privileged low-dimensional signal that is always accurate and background-invariant. The prevailing approach — encoding pixels end-to-end with a CNN or ViT — forces the encoder to spend capacity re-representing (a) at every frame and provides no clean interface to fuse (c). We instead build a representation in which (a), (b), and (c) are *explicitly disentangled at the feature level* and then re-bound through a compact associative memory before being fed to a downstream planner.
 
-> 中文注：这一段是全文的立论基础。三分立的分解是我们与 Iso-Dream / TIA 区别的第一处（它们只做两分立，且没有 proprioception 通道）。
+A key design finding of this work is *how* to tell (a) from (b). The intuitive criterion — temporal stability, as used in slow-feature analysis and controllable-dynamics separation — turns out to be systematically misleading for object-centric encoders: a slot that tracks a moving object has *stable* content, while un-anchored background slots drift (§III.D.3, §IV.G). We therefore route on a per-frame *spatial* signature — attention compactness — which additionally requires no cross-frame slot identity and remains valid when the background itself moves (e.g., video-distractor benchmarks, §IV.C).
+
+> 中文注：这一段是全文的立论基础。三分立的分解 + "空间而非时间"的路由判据是与 Iso-Dream / TIA 的两处本质区别。第二段把 GT.3 的机制发现提到了 premise 层面——这是把 negative result 转化为 design insight 的写法。
 
 ---
 
@@ -24,7 +26,7 @@ Total trainable parameter count is 7.5 M; the frozen DINOv2 backbone contributes
 
 ## III.C  Frozen Visual Perception
 
-We use DINOv2-ViT-S/14 [Oquab et al., 2023] as a frozen visual backbone. At each step we resize **O**<sub>t</sub> to 224 × 224 and normalize by ImageNet statistics, obtaining N = 196 patch tokens **P**<sub>t</sub> ∈ ℝ<sup>N×d<sub>v</sub></sup> with d<sub>v</sub> = 384. All DINOv2 parameters are held fixed; only the modules described below are trained.
+We use DINOv2-ViT-S/14 [Oquab et al., 2023] as a frozen visual backbone. At each step we resize **O**<sub>t</sub> to 224 × 224 and normalize by ImageNet statistics, obtaining N = 256 patch tokens (16 × 16 grid) **P**<sub>t</sub> ∈ ℝ<sup>N×d<sub>v</sub></sup> with d<sub>v</sub> = 384. All DINOv2 parameters are held fixed; only the modules described below are trained.
 
 Freezing is deliberate. First, DINOv2 is self-supervised on 142 M curated images and has been shown to produce dense features that transfer strongly across domains including robotic manipulation [Nair et al., 2022; Majumdar et al., 2023]. Second, joint fine-tuning would require an order-of-magnitude more data and would forfeit the sim-to-real robustness we later exploit. Third, the frozen backbone makes the effective learning problem — Slot Attention on top of stable, semantically-rich tokens — orders of magnitude cheaper than pixel-space representation learning. Section IV.G reports a sensitivity study for this choice.
 
@@ -53,34 +55,36 @@ $$
 
 where sg[·] is stop-gradient. Feature-level reconstruction is decisive: pixel-level slot reconstruction fails to converge on manipulation scenes with strong high-frequency content (grid patterns, wood grain, reflective surfaces), while DINOv2 features are already low-frequency and semantic, so the slot decoder need only *route* content rather than paint it.
 
-### III.D.3  Learned Slow/Fast Routing
+### III.D.3  Learned Object/Background Routing via Spatial Connectivity
 
-Each slot is routed to either the slow (background) or fast (foreground) stream by a small classifier r<sub>φ</sub> : ℝ<sup>d<sub>s</sub></sup> → ℝ<sup>2</sup>. Routing uses the straight-through Gumbel-Softmax [Jang et al., 2017] with temperature τ<sub>r</sub>
-
-$$
-\mathbf{g}_t^{(k)} = \text{GumbelSoftmax}\bigl(r_\phi(s_t^{(k)}), \tau_r\bigr) \in \{(1,0),\,(0,1)\},
-$$
-
-with the first / second coordinate indicating slow / fast, respectively. Let **m**<sub>t</sub><sup>fg</sup> ∈ {0,1}<sup>K</sup> denote the fast mask. We define the fast and slow slot sets 𝒮<sub>t</sub><sup>fg</sup> = {**s**<sub>t</sub><sup>(k)</sup> : m<sub>t</sub><sup>fg,(k)</sup> = 1} and 𝒮<sub>t</sub><sup>bg</sup> accordingly. The router is trained by three signals working in concert:
-
-*Temporal smoothness on slow slots.* Background slots should be nearly time-invariant across an episode:
+Each slot is routed to either the background ("slow") or foreground ("fast") stream by a small classifier r<sub>φ</sub> : ℝ<sup>d<sub>s</sub></sup> → ℝ<sup>2</sup> with straight-through Gumbel-Softmax [Jang et al., 2017]:
 
 $$
-\mathcal{L}_{\text{slow}} = \sum_{k=1}^K (1 - m_t^{\text{fg},(k)})\,\bigl\|s_t^{(k)} - \text{sg}(s_{t-1}^{(k)})\bigr\|_2^2.
+\mathbf{g}_t^{(k)} = \text{GumbelSoftmax}\bigl(r_\phi(s_t^{(k)}), \tau_r\bigr) \in \{(1,0),\,(0,1)\}.
 $$
 
-*Marginal routing prior.* Empirically, ~70 % of scene tokens are background in typical manipulation scenes; we impose
+**Why not temporal signals.** The natural supervision for this router — and the one used by prior slow-feature and controllable-dynamics approaches [Wiskott & Sejnowski, 2002; Iso-Dream] — is temporal: label slots whose content changes little as background. In a controlled study (§IV.G) we find this entire signal class to be *systematically inverted* for object-centric encoders: a slot that successfully tracks a moving object re-attends to the same object appearance at each step, so its *content* is temporally stable, while background slots — anchored to nothing — drift and exhibit high content variance. Temporal invariance is a signature of *successful tracking*, not of world-stability. Across three encoder variants and three temporal target formulations (slot-content difference, attention-centroid displacement, attention-mask IoU change), routers trained on temporal targets selected background slots as "fast" with Cohen's d ≈ −1.25 against ground-truth objectness.
+
+**Spatial connectivity as the routing signal.** We instead exploit a *per-frame, spatial* signature: foreground slots attend to compact, connected regions (an object), while background slots attend diffusely. For slot k, binarize the top-⌈N/K⌉ patches of its attention mask α<sub>t</sub><sup>(k)</sup> into a set B<sub>k</sub> and compute the **neighbor coherence**
 
 $$
-\mathcal{L}_{\text{route}} = \text{KL}\bigl(\bar{\pi}_r \,\|\, [0.7, 0.3]\bigr),
-\quad \bar{\pi}_r = \tfrac{1}{BK}\sum_{b,k}\text{softmax}(r_\phi(s_{b,t}^{(k)})).
+\kappa_t^{(k)} = \frac{1}{|B_k|}\sum_{p \in B_k} \frac{\bigl|\,\mathcal{N}_4(p) \cap B_k\,\bigr|}{\bigl|\,\mathcal{N}_4(p)\,\bigr|},
 $$
 
-*Downstream informativeness.* Because only fast slots reach the binding memory and policy, slots that carry task-relevant motion cues receive gradient pressure to be routed to the fast stream. This is not an explicit loss but an emergent effect verified in Fig. 5.
+the mean fraction of each selected patch's 4-neighbors that are also selected — a scale-invariant, differentiable-friendly compactness score computable with a single 3 × 3 convolution. The router is supervised by a soft BCE whose target is the quantile min-max normalization of κ within each frame:
 
-Temperature is annealed as τ<sub>r</sub>(t) = max(0.3, 1.0·0.9995<sup>t</sup>). We use hard routing at forward time and soft gradients through the STE estimator.
+$$
+\mathcal{L}_{\text{slow}} = -\frac{1}{K}\sum_k \bigl[\, \tilde{\kappa}^{(k)} \log p_\phi^{\text{fg}}(s^{(k)}) + (1-\tilde{\kappa}^{(k)}) \log p_\phi^{\text{bg}}(s^{(k)}) \,\bigr],
+\qquad \tilde{\kappa}^{(k)} = \text{clamp}\Bigl(\tfrac{\kappa^{(k)} - \kappa_{q10}}{\kappa_{q90} - \kappa_{q10}},\, 0,\, 1\Bigr).
+$$
 
-> 中文注：三重信号是关键——如果只有 route prior，routing 会退化成随机；只有 slow loss 会让所有 slot 都变慢。三者互相制约。
+On ground-truth-annotated synthetic scenes this yields Cohen's d = +1.89 (rank-AUC 0.925) for fast-vs-slow objectness separation, with the learned router *exceeding* the connectivity proxy that supervises it (d = +1.50) — evidence that r<sub>φ</sub> generalizes from the spatial cue to slot-content features. Localization is not traded away: object-coverage 1.000 and attention enrichment 18.8× are the best across all variants we tested.
+
+Two additional terms stabilize routing as before: the *marginal prior* ℒ<sub>route</sub> = KL(π̄<sub>r</sub> ‖ [0.7, 0.3]) reflecting the typical background fraction, and the emergent *downstream informativeness* pressure from the policy pathway. Temperature anneals τ<sub>r</sub>(t) = max(0.3, 0.9995<sup>t</sup>); deployment uses deterministic argmax routing.
+
+**Disclosed limitation.** Connectivity conflates "object" with "spatially compact": large articulated objects (a drawer front, a bin) are down-weighted — on synthetic scenes with object diameters spanning 1–8 patches, the owner-slot compactness rank decreases with size (ρ = −0.25) yet remains above chance (0.70) even for the largest objects. Section V discusses implications for cluttered scenes.
+
+> 中文注：这一节现在是全文技术上最有辨识度的部分——"时间信号系统性反转"是我们自己的实证发现（§IV.G 有完整数据），连通性路由是对它的建设性解答。reviewer 若质疑"为什么不用最自然的时间信号"，这里已有完整回答。
 
 ---
 
@@ -250,7 +254,7 @@ At real-robot deployment we run the frozen DINOv2 on-board (14 ms perception + 3
 
 We advance four novel elements over prior representation-learning approaches for robot RL:
 
-1. Object-centric slow/fast decomposition using frozen DINOv2 + Slot Attention with a learned Gumbel router (vs. threshold-based [prior IJCAI], pixel VAE [Iso-Dream], or single-vector RSSM [DreamerV3]).
+1. Object-centric background/foreground decomposition using frozen DINOv2 + Slot Attention with a Gumbel router supervised by *per-frame spatial connectivity* — motivated by our finding that the intuitive temporal-invariance criterion is systematically inverted for object-centric encoders (vs. threshold-based [prior IJCAI], pixel VAE [Iso-Dream], or single-vector RSSM [DreamerV3], all of which rely on temporal signals).
 2. Cross-modal binding of fast slots with proprioception via a Transformer memory that is explicitly *actionable* (predicts next proprioception, aligned by action cosine similarity).
 3. Slot-space background swap augmentation that is label-free, texture-library-free, and enforces policy-consistency directly.
 4. Integration into a TD-MPC2 planner, demonstrating for the first time that structured disentangled representations can *outperform* the pixel-encoder default of a state-of-the-art model-based RL algorithm on both sample efficiency and background-robustness metrics.
