@@ -93,6 +93,24 @@ class Stage1Trainer:
         self.out_dir = Path(cfg.out_dir)
         self.out_dir.mkdir(parents=True, exist_ok=True)
 
+        # === CP5e/f consistency warning ===
+        # Under carryover, tracking slots have LOW content-diff (features are
+        # stable — same object at a new spatial position) while drifting or
+        # re-binding slots have HIGH content-diff. Consequently, using content
+        # diff as the L_slow target under carryover *inverts* the semantics
+        # the router should learn (measured corr(diff, motion) = -0.379 on
+        # CP5e). The proper next-step fix is an alpha-displacement target.
+        # Until then, set lambda_slow=0 under carryover to avoid teaching the
+        # router the wrong mapping.
+        if cfg.slot_init_mode == "carryover" and cfg.lambda_slow > 0:
+            print(
+                "[Stage1] WARNING: slot_init_mode=carryover with "
+                f"lambda_slow={cfg.lambda_slow} > 0. Content-diff target is "
+                "anti-signal under carryover (see CP5e diagnostic). Strongly "
+                "recommend lambda_slow=0 for slot_iters ablation; wait for "
+                "alpha-displacement target patch before re-enabling."
+            )
+
     # ------------------------------------------------------------------
 
     def _lr_at(self, step: int) -> float:
@@ -154,7 +172,14 @@ class Stage1Trainer:
             else:
                 raise ValueError(f"unknown slot_init_mode: {mode}")
 
-            prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
+            # Under carryover, slot k in cur is constructed FROM slot k in
+            # prev (prev's output is cur's init). Index correspondence is
+            # already exact-by-construction, so cosine NN matching would
+            # only scramble ~42 % of the alignments (measured on CP5e). Skip.
+            if mode == "carryover":
+                prev_for_slow = slots_prev.detach()
+            else:
+                prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
             target = target_t
         else:
             if not getattr(self, "_warned_flat", False):
