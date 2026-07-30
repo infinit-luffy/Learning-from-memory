@@ -194,6 +194,7 @@ def main():
         log_every=cfg.log.log_every,
         ckpt_every=cfg.log.ckpt_every,
         viz_every=viz_every,
+        slow_signal=str(cfg.loss.get("slow_signal", "content_diff")),
         slow_variant=str(cfg.loss.get("slow_variant", "soft_bce")),
         slow_temperature=float(cfg.loss.get("slow_temperature", 1.0)),
         slot_init_mode=str(cfg.train.get("slot_init_mode", "shared")),

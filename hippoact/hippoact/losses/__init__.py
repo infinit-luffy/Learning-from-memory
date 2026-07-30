@@ -2,6 +2,8 @@ from hippoact.losses.all import (
     slot_reconstruction_loss,
     slow_temporal_loss,
     slow_temporal_loss_soft,
+    slow_connectivity_loss,
+    slot_neighbor_coherence,
     route_prior_kl,
     slot_diversity_loss,
     forward_proprio_loss,

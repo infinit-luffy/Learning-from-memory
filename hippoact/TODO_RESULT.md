@@ -404,6 +404,109 @@ supervision」。本文真值仅用于**评估**，不进 loss，与该声明不
 
 ---
 
+# CP6 — 路由信号改为 alpha 空间连通性：P1 机制成立
+
+> 决策链：GT.4 否掉整类「slot 时间变化量」信号（含 Step M2 计划的 centroid shift）。
+> GT.5 发现空间紧凑度可用但有尺寸混淆。本节把它做成尺度不变的可训练信号并验证。
+> 新增 `loss.slow_signal: {content_diff, alpha_connectivity}`，**默认仍为 content_diff**，
+> 新路径可选可回退。19 个测试全过。
+
+## CP6.1 为什么选连通性而不是像素运动
+
+两个候选都能绕开「slot 时间变化量」的失效：
+
+| 候选 | spearman(objectness) | 尺寸混淆 | 在 Q2（DCS 视频背景）下 |
+|---|---|---|---|
+| pixel motion in footprint | **+0.727** | −0.475 | ❌ **崩** —— 视频背景本身在动，会被判 fast |
+| alpha 空间连通性 | +0.623 | **−0.063** | ✅ 不看运动，背景动不动无所谓 |
+
+选连通性的主要理由不是那 0.1 的相关系数，而是**它恰好在论文最难的 Q2 场景下稳健**。
+pixel motion 保留作 ablation 对照。
+
+## CP6.2 实现：neighbor coherence（GPU，连续，尺度不变）
+
+`slot_neighbor_coherence`：top-1/16 的 alpha 二值化后，统计这些 patch 的 4-邻居
+中有多少比例也在集合内。一次 3×3 卷积，无 Python 循环。
+
+| 实现 | spearman | top25% obj (均值 1.39) | 并列率 | 尺寸混淆 |
+|---|---|---|---|---|
+| 连通分量占比 (scipy) | +0.578 | 2.28 | 0.519 | −0.005 |
+| **neighbor coherence (GPU)** | **+0.623** | **2.44** | **0.177** | −0.063 |
+
+两者一致性 +0.812。GPU 版更强、并列率低三倍。自检：3×3 连通块 coherence 0.800，
+散点 0.000。
+
+## CP6.3 训练前置检查（两条都过才动代码）
+
+- 信号对 objectness 的 spearman = **+0.623**
+- 信号能否从 slot 向量学到：线性探针 **AUC 0.966**
+  （对照上界：objectness 本身 AUC 0.956 —— 基本触顶）
+
+## CP6.4 结果：Cohen's d 从 −1.25 翻到 +1.89
+
+配置刻意退回最简：`slot_iters 3` / `slot_dim 128` / `slot_init_mode shared` /
+`lambda_slow 0.5`，数据 `synth_gt`（400 clips，带精确 annotations）。
+
+```
+Cohen's d:  −1.248  →  +1.889        秩 AUC:  0.204  →  0.925
+FAST slots objectness  4.44 (中位数 4.24)
+SLOW slots objectness  0.09 (中位数 0.01)      <- 几乎纯背景
+router P(fast): 真物体 slot 0.847 / 非物体 slot 0.541
+```
+
+### 定位未被牺牲，反而是历次最好
+
+| | 富集倍数 | coverage | identity | exclusivity |
+|---|---|---|---|---|
+| shared 训练（此前最好） | 18.16 | 1.000 | 0.415 | 0.420 |
+| **connectivity 路由** | **18.78** | 1.000 | **0.466** | **0.430** |
+
+三项均为历次最好。**不存在「修路由需牺牲定位」的取舍。** identity 0.466 是副产品，
+本轮未为其做任何设计。
+
+### router 超越了训练它的代理
+
+```
+纯 connectivity 阈值路由（代理上限）  d = +1.503
+训练后的 router                      d = +1.855
+corr(router P(fast), connectivity)   = +0.886
+```
+
+router 比代理高 0.35 个 d —— 它看的是 slot 向量（比 alpha 派生的代理更丰富），
+连通性只是把它引到正确概念上。这说明方案不是「把手工特征硬塞进模型」。
+
+## CP6.5 被一并简化掉的东西
+
+连通性是**逐帧**信号，因此 carryover / Hungarian 匹配 / 跨帧 slot 身份**全部不需要**。
+
+前七层中相当一部分工作（CP5b pair loader、CP5c shared init、CP5e-g carryover、
+M1/M1b matching）都是在为「跨帧身份」这个前提搭地基。**该前提本身并非必要**，
+它只是原设计用时间不变性做路由的副产物。
+
+## CP6.6 三个必须记下的保留
+
+1. **`route_prior_slow=0.7` 现已标定错误。** router 给出 41–44% slow，先验要 70%，
+   `L_route` 升到 0.15–0.26（健康区间 [0.001, 0.1]）。两个损失在打架，调整先验
+   应还有提升空间。
+2. **identity persistence 0.466 仅是副产品。** 若 Stage 2 的 binding memory 需要
+   稳定跨帧身份，此数不足，需单独设计。（TODO 中的判断是 Binding Transformer 为
+   attention over set、对 slot index 不敏感，若成立则不需要。）
+3. **必须在 Robosuite 上重验，不可直接写入论文。** 本信号在合成场景有效靠的是
+   「物体紧凑、背景弥散」。真机中桌面局部的 slot 也可能紧凑，抽屉/箱体虽连通但
+   形状复杂。宽半径证伪测试只排除了**尺寸**混淆（−0.063），**未排除形状混淆**。
+
+## CP6.7 对论文的影响
+
+- **§III 的路由设计需重写**：从「按时间不变性路由」改为「按空间连通性路由」，
+  并给出前者失效的实证（GT.3 的 d = −1.25 + 机制解释）
+- **§IV.I negative result 换素材**：守恒关系与绑定瞬态已被 GT.2 推翻，
+  应替换为「时间不变性在 slot 跟踪成功时反转」这一更强的发现
+- **Table VII purity** 对应 exclusivity = 0.430，仍低于论文声称的 0.86；
+  但 coverage 1.000、富集 18.78、路由 d = +1.89 是可直接引用的强结果
+- 方法可**大幅简化**：跨帧身份相关的全部机制可从 §III 移除
+
+---
+
 ## 附：可复用诊断脚本
 
 全部已整理进 `hippoact/tools/diagnostics/`，含 README（度量约定、参考数值、已知局限）。
@@ -429,3 +532,4 @@ supervision」。本文真值仅用于**评估**，不进 loss，与该声明不
 | `gt_eval.py` | **精确真值**下的定位 / coverage / 跨帧身份 / exclusivity |
 | `gt_router.py` | **P1 核心测量**：router 慢快划分 vs 真值，含 oracle/uniform 对照 |
 | `gt_target.py` | 精确真值下对比三个候选 L_slow target |
+| `gt_signal_search.py` | 搜索尺度不变的路由信号，含尺寸混淆检验 |

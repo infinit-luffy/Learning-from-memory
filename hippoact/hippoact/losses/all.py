@@ -20,6 +20,81 @@ def slot_reconstruction_loss(
     return F.mse_loss(recon, target_features.detach())
 
 
+_NEIGH_KERNEL = torch.tensor([[0., 1., 0.], [1., 0., 1.], [0., 1., 0.]]).view(1, 1, 3, 3)
+
+
+def slot_neighbor_coherence(alpha: torch.Tensor, top_frac: float = 1 / 16) -> torch.Tensor:
+    """Per-slot spatial connectivity of the attention map. (B, K, N) -> (B, K).
+
+    For each slot, binarize the top ``top_frac`` of its alpha to a patch set,
+    then measure what fraction of those patches' 4-neighbours are also in the
+    set. Object slots form one contiguous blob and score high; background slots
+    are scattered and score low.
+
+    Scale invariant by construction — a large object is still ONE blob — which
+    is why this is preferred over alpha spatial standard deviation. Measured on
+    synthetic data with disk diameters spanning 1.1-8.4 patches:
+
+        signal                spearman(objectness)  corr(radius, rank)
+        alpha spatial std            +0.622               -0.238
+        connected-component frac     +0.578               -0.005
+        neighbor coherence (this)    +0.623               -0.063
+        pixel motion in footprint    +0.727               -0.475
+
+    Pixel motion scores highest but is unusable as a routing signal in the
+    Distracting-Suite setting: a moving video background would be routed fast.
+    This signal never looks at motion, so background video is irrelevant to it.
+    """
+    B, K, N = alpha.shape
+    g = int(round(N ** 0.5))
+    if g * g != N:
+        raise ValueError(f"non-square patch grid N={N}")
+    k = max(2, int(N * top_frac))
+    b = torch.zeros_like(alpha)
+    b.scatter_(-1, alpha.topk(k, dim=-1).indices, 1.0)
+    bm = b.reshape(B * K, 1, g, g)
+    ker = _NEIGH_KERNEL.to(device=alpha.device, dtype=alpha.dtype)
+    nb = F.conv2d(bm, ker, padding=1)
+    deg = F.conv2d(torch.ones_like(bm), ker, padding=1)
+    coh = (nb * bm).sum((1, 2, 3)) / (deg * bm).sum((1, 2, 3)).clamp(min=1e-8)
+    return coh.reshape(B, K)
+
+
+def slow_connectivity_loss(
+    alpha: torch.Tensor,            # (B, K, N)  slot decoder attention
+    router_logits: torch.Tensor,    # (B, K, 2)
+    temperature: float = 1.0,
+    low_q: float = 0.10,
+    high_q: float = 0.90,
+) -> torch.Tensor:
+    """Route slots by spatial connectivity instead of temporal variance.
+
+    Motivation (measured, not assumed): every temporal-change target we tried
+    is dominated by slot drift rather than world motion. Background covers ~95%
+    of the frame with no unique slot assignment, so background slots wander and
+    any change measure ranks them first, while an object slot that successfully
+    tracks its object has a *stable* representation. Measured consequence: the
+    router learned the inverted split, Cohen's d = -1.25 against exact
+    ground-truth object masks, for both content-diff and centroid-shift targets.
+
+    Connectivity is a per-frame property, so this target needs no cross-frame
+    slot identity at all — no carryover, no Hungarian matching, no shared init.
+
+    High coherence (compact blob) -> fast; low coherence (scattered) -> slow.
+    Target uses the same bimodal-safe quantile min-max as
+    ``slow_temporal_loss_soft``.
+    """
+    with torch.no_grad():
+        coh = slot_neighbor_coherence(alpha)                          # (B, K)
+        lo = coh.quantile(low_q, dim=-1, keepdim=True)
+        hi = coh.quantile(high_q, dim=-1, keepdim=True)
+        target = ((coh - lo) / (hi - lo + 1e-6)).clamp(0.0, 1.0)
+        if temperature != 1.0:
+            target = torch.sigmoid((target - 0.5) * 4.0 * temperature)
+    log_p = F.log_softmax(router_logits, dim=-1)
+    return -(target * log_p[..., 1] + (1.0 - target) * log_p[..., 0]).mean()
+
+
 def slow_temporal_loss_soft(
     slots_t: torch.Tensor,          # (B, K, D)  current slots
     slots_prev: torch.Tensor,       # (B, K, D)  previous frame slots (matched)
