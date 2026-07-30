@@ -1,6 +1,7 @@
 from hippoact.losses.all import (
     slot_reconstruction_loss,
     slow_temporal_loss,
+    slow_temporal_loss_soft,
     route_prior_kl,
     slot_diversity_loss,
     forward_proprio_loss,
@@ -11,6 +12,7 @@ from hippoact.losses.all import (
 __all__ = [
     "slot_reconstruction_loss",
     "slow_temporal_loss",
+    "slow_temporal_loss_soft",
     "route_prior_kl",
     "slot_diversity_loss",
     "forward_proprio_loss",

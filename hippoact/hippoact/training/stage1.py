@@ -20,6 +20,7 @@ from hippoact.losses import (
     slot_diversity_loss,
     slot_reconstruction_loss,
     slow_temporal_loss,
+    slow_temporal_loss_soft,
 )
 from hippoact.utils.slot_matching import match_slots_nn
 
@@ -39,7 +40,12 @@ class Stage1Config:
     tau_min: float = 0.3
     log_every: int = 50
     ckpt_every: int = 10_000
-    viz_every: int = 5000        # dump slot alpha overlays every N steps
+    viz_every: int = 5000
+    # Slow-temporal-loss variant. "soft_bce" (default) = MAD-standardized
+    # sigmoid target BCE; "quantile_ce" = old quantile-thresholded CE (kept
+    # for A/B). "soft_bce" is decisively better once slot init is shared.
+    slow_variant: str = "soft_bce"
+    slow_temperature: float = 1.0
     out_dir: str = "outputs/stage1"
     device: str = "cuda"
     use_wandb: bool = False
@@ -106,10 +112,18 @@ class Stage1Trainer:
             with torch.no_grad():
                 target_t    = self.enc.dino(imgs_t)
                 target_prev = self.enc.dino(imgs_prev)
-            slots      = self.enc.slot_attn(target_t)
-            slots_prev = self.enc.slot_attn(target_prev)
-            # Match slot identity via cosine NN so that per-index diff reflects
-            # content change, not permutation drift.
+            # === Shared slot init across the pair ===
+            # Without this, ~87% of (slots_t - slots_prev)^2 is stochastic
+            # init noise from torch.randn draws, not content change. See
+            # SlotAttention.sample_init docstring.
+            B = target_t.shape[0]
+            slots_init = self.enc.slot_attn.sample_init(
+                B, device=target_t.device, dtype=target_t.dtype
+            )
+            slots      = self.enc.slot_attn(target_t,    slots_init=slots_init)
+            slots_prev = self.enc.slot_attn(target_prev, slots_init=slots_init)
+            # Post-shared-init, NN matching handles any residual permutation
+            # drift from iterative refinement.
             prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
             target = target_t
         else:
@@ -136,12 +150,26 @@ class Stage1Trainer:
             "L_div":    slot_diversity_loss(slots),
         }
         if prev_for_slow is not None:
-            losses["L_slow"] = slow_temporal_loss(
-                slots, prev_for_slow, logits, prior_slow=self.cfg.route_prior_slow
-            )
+            if self.cfg.slow_variant == "soft_bce":
+                losses["L_slow"] = slow_temporal_loss_soft(
+                    slots, prev_for_slow, logits,
+                    temperature=self.cfg.slow_temperature,
+                )
+            elif self.cfg.slow_variant == "quantile_ce":
+                losses["L_slow"] = slow_temporal_loss(
+                    slots, prev_for_slow, logits,
+                    prior_slow=self.cfg.route_prior_slow,
+                )
+            else:
+                raise ValueError(f"unknown slow_variant: {self.cfg.slow_variant}")
         else:
             losses["L_slow"] = slots.new_zeros(())
-        losses["slow_ratio"] = slow_mask.mean().detach()
+        # Two slow-ratio metrics — gap between them exposes Gumbel/train-vs-
+        # argmax/deploy drift; ideally < 0.05 before Stage 2.
+        losses["slow_ratio_gumbel"] = slow_mask.mean().detach()
+        with torch.no_grad():
+            argmax_slow = (logits.argmax(dim=-1) == 0).float().mean()
+        losses["slow_ratio_argmax"] = argmax_slow
 
         loss = (
             losses["L_slot"]

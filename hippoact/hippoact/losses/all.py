@@ -20,6 +20,40 @@ def slot_reconstruction_loss(
     return F.mse_loss(recon, target_features.detach())
 
 
+def slow_temporal_loss_soft(
+    slots_t: torch.Tensor,          # (B, K, D)  current slots
+    slots_prev: torch.Tensor,       # (B, K, D)  previous frame slots (matched)
+    router_logits: torch.Tensor,    # (B, K, 2)  pre-softmax router logits
+    temperature: float = 1.0,
+) -> torch.Tensor:
+    """Soft-target BCE using MAD-standardized per-slot temporal variance.
+
+    Removes the fixed-fraction assumption of ``slow_temporal_loss`` (which
+    forces a quantile-based binary label): each slot's target is a continuous
+    function of its own diff, so slots with genuinely ambiguous motion get
+    target ≈ 0.5 and receive zero gradient rather than being force-labeled.
+
+    The CE floor is honest: with per-slot target ``t``, min CE = H(t). For
+    ``t = 0.5`` this is ln 2 ≈ 0.693, but *only for slots whose true motion
+    signal is ambiguous* — as slot decomposition sharpens, targets migrate to
+    0 or 1 and the total loss keeps descending. In practice a stalled
+    ``L_slow`` under this variant is decisive evidence that ``diff`` itself
+    carries no motion signal (e.g. dominated by slot-init noise; see
+    ``SlotAttention.sample_init``).
+    """
+    with torch.no_grad():
+        diff = (slots_t - slots_prev).pow(2).sum(dim=-1)              # (B, K)
+        d_med = diff.median(dim=-1, keepdim=True).values              # (B, 1)
+        # MAD (median absolute deviation): robust to the long-tail from
+        # 1-2 truly moving slots.
+        d_mad = (diff - d_med).abs().median(dim=-1, keepdim=True).values + 1e-6
+        target_fast = torch.sigmoid((diff - d_med) / d_mad * temperature)
+    log_p = F.log_softmax(router_logits, dim=-1)
+    return -(
+        target_fast * log_p[..., 1] + (1.0 - target_fast) * log_p[..., 0]
+    ).mean()
+
+
 def slow_temporal_loss(
     slots_t: torch.Tensor,          # (B, K, D)  current slots
     slots_prev: torch.Tensor,       # (B, K, D)  previous frame slots

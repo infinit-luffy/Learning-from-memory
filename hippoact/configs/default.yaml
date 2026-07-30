@@ -38,6 +38,12 @@ loss:
   lambda_swap: 0.3
   align_eps: 0.05
   align_tau: 0.1
+  # slow_variant:  "soft_bce" (default) uses MAD-standardized sigmoid target
+  # BCE — no fraction assumption, decisively better after shared slot init.
+  #                 "quantile_ce" is the older quantile-thresholded CE, kept
+  # for A/B.
+  slow_variant: soft_bce
+  slow_temperature: 1.0
 
 train:
   stage1_steps: 100000

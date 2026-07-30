@@ -193,6 +193,8 @@ def main():
         log_every=cfg.log.log_every,
         ckpt_every=cfg.log.ckpt_every,
         viz_every=viz_every,
+        slow_variant=str(cfg.loss.get("slow_variant", "soft_bce")),
+        slow_temperature=float(cfg.loss.get("slow_temperature", 1.0)),
         out_dir=cfg.log.out_dir + "/stage1",
         device=cfg.train.device,
         use_wandb=args.wandb,

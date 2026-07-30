@@ -42,15 +42,42 @@ class SlotAttention(nn.Module):
             nn.Linear(hidden_mlp, slot_dim),
         )
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """x: (B, N, input_dim). Return slots: (B, K, slot_dim)."""
+    def sample_init(self, batch_size: int, device=None, dtype=None) -> torch.Tensor:
+        """Sample slot queries from ``mu, sigma`` params. Exposed so paired
+        forward passes can share the same random draw, eliminating the
+        stochastic-init noise that would otherwise dominate temporal-variance
+        signals (see docs/paper_section_III_method.md §III.D.3, discussion of
+        the shared-init motivation).
+        """
+        device = device or self.slots_mu.device
+        dtype = dtype or self.slots_mu.dtype
+        mu = self.slots_mu.expand(batch_size, self.num_slots, -1)
+        sigma = self.slots_logsigma.exp().expand(batch_size, self.num_slots, -1)
+        eps = torch.randn(mu.shape, device=device, dtype=dtype)
+        return mu + sigma * eps
+
+    def forward(
+        self, x: torch.Tensor, slots_init: torch.Tensor | None = None
+    ) -> torch.Tensor:
+        """x: (B, N, input_dim). Return slots: (B, K, slot_dim).
+
+        If ``slots_init`` is given, use it verbatim as the starting slot
+        queries (skip stochastic sampling). Otherwise, sample a fresh init
+        via ``sample_init``. Passing a shared init across two forward passes
+        makes the two outputs directly comparable per slot index.
+        """
         B = x.shape[0]
         x_n = self.norm_input(x)
         k, v = self.to_k(x_n), self.to_v(x_n)
 
-        mu = self.slots_mu.expand(B, self.num_slots, -1)
-        sigma = self.slots_logsigma.exp().expand(B, self.num_slots, -1)
-        slots = mu + sigma * torch.randn_like(mu)
+        if slots_init is None:
+            slots = self.sample_init(B, device=x.device, dtype=x.dtype)
+        else:
+            assert slots_init.shape == (B, self.num_slots, self.slot_dim), (
+                f"slots_init shape {tuple(slots_init.shape)} "
+                f"!= expected ({B}, {self.num_slots}, {self.slot_dim})"
+            )
+            slots = slots_init
 
         for _ in range(self.iters):
             slots_prev = slots

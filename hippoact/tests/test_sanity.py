@@ -101,6 +101,50 @@ def test_slow_loss_has_no_trivial_all_fast_minimum():
     assert l_fast > l_neutral
 
 
+def test_soft_slow_loss_rewards_matching_router():
+    """The soft variant should rank routers the same way as the quantile CE
+    when the motion signal is clean: matching router < neutral < flipped."""
+    from hippoact.losses import slow_temporal_loss_soft
+
+    torch.manual_seed(0)
+    slots_prev = torch.zeros(2, 8, 16)
+    slots_t = torch.zeros(2, 8, 16)
+    slots_t[:, 4:] += 3.0                      # clear motion signal on last 4
+
+    good = torch.tensor([[10.0, -10.0]] * 4 + [[-10.0, 10.0]] * 4)
+    good = good.unsqueeze(0).expand(2, -1, -1).contiguous()
+    neutral = torch.zeros(2, 8, 2)
+    flipped = torch.tensor([[-10.0, 10.0]] * 4 + [[10.0, -10.0]] * 4)
+    flipped = flipped.unsqueeze(0).expand(2, -1, -1).contiguous()
+
+    l_good = slow_temporal_loss_soft(slots_t, slots_prev, good).item()
+    l_neu  = slow_temporal_loss_soft(slots_t, slots_prev, neutral).item()
+    l_bad  = slow_temporal_loss_soft(slots_t, slots_prev, flipped).item()
+
+    assert l_good < l_neu < l_bad
+
+
+def test_slot_attention_shared_init_is_deterministic():
+    """When two forward passes share ``slots_init`` and see the same input,
+    outputs must be identical (bit-exact). This is the invariant that closes
+    the ~87 % stochastic-init noise floor in the temporal-variance signal.
+    """
+    from hippoact.encoders.slot_attention import SlotAttention
+
+    torch.manual_seed(0)
+    sa = SlotAttention(num_slots=8, slot_dim=32, input_dim=64, iters=2)
+    x = torch.randn(2, 25, 64)
+    init = sa.sample_init(2)
+    y1 = sa(x, slots_init=init)
+    y2 = sa(x, slots_init=init)
+    assert torch.allclose(y1, y2, atol=1e-6), "shared init did not fully determinize forward pass"
+
+    # And *without* shared init, two draws should differ.
+    y3 = sa(x)
+    y4 = sa(x)
+    assert not torch.allclose(y3, y4, atol=1e-4), "un-shared init unexpectedly gave identical outputs"
+
+
 def test_infonce_returns_zero_without_positive_pairs():
     c = torch.randn(8, 32)
     # actions all orthogonal → no positive pairs
