@@ -1,93 +1,139 @@
 # TODO — 服务器 Agent 执行清单
 
 > 权威任务清单。判据不过 → 停下带数据回 cowork。
-> 最后更新：2026-07-30（CP6 之后 — **synthetic phase 正式关闭**）
+> 最后更新：2026-07-30（**Scope 决策落定：ICRA 2026 紧凑版 + 4×A5000 立即可用**）
+> 全局分析见 `docs/experiment_sanity_review.md`（为什么这样排序）。
 
 ---
 
-## 🎉 Synthetic Phase 关闭声明
+## Scope A 声明（ICRA 2026，deadline ~9 月 15，剩 6 周）
 
-CP6 达成全部 exit criteria：
-- Cohen's d = **+1.889**（判据 ≥ 1.0）、秩 AUC 0.925
-- FAST objectness 4.44 / SLOW 0.09（几乎纯净分离）
-- 定位富集 18.78×、coverage 1.000、identity 0.466、exclusivity 0.430——**四项历次最好，无取舍**
-- Router 泛化超过训练代理（learned 1.889 > proxy 阈值路由 1.503）
+**论文 claim 收缩为四件已验证/可验证的事**：
+1. 时间路由信号系统性反转（已验证，§IV.I）
+2. 空间连通性路由（合成已验证 d=+1.89；DCS 待验证 ← W1 关键）
+3. Diagnostic Protocol（已验证，§IV.G.0）
+4. **Q2 背景鲁棒性**（DCS，待跑 ← 主实验）+ Meta-World 1-2 任务示 robotics 相关性
 
-**方法定型（Stage-1 配方）**：
-```
-encoder:  DINOv2 frozen + SlotAttention(iters=3, dim=128) + shared init
-routing:  slow_signal = alpha_connectivity (neighbor coherence)
-loss:     L_slot + λ_slow·BCE(connectivity target) + L_route + L_div
-不需要:   carryover / 跨帧匹配 / learned queries / 任何时间类信号
-```
+**砍掉/降级**（写 future work，期刊版再补）：
+真机三任务、slot-swap augmentation (Q3)、safety gate (Q5)、
+7-baseline 完整矩阵（保 TD-MPC2-pixel 主对比 + DrQ-v2 一个 model-free 代表）。
 
-已取消的计划：M1b / M1c / M2 alpha-displacement patch（GT.4 否掉整类时间信号）。
-
-**遗留决策（Phase 2 前处理）**：
-- [ ] `configs/default.yaml` 把 `loss.slow_signal` 默认切到 `alpha_connectivity`
-      （CP6 为了可回退默认还是 content_diff；现在 CP6 已验证，切默认）
-- [ ] 尺寸混淆 limitation（大物体被弱化，corr = −0.247）记入论文 §V
+**算力排布**：4×A5000 跑长 run（500K baseline、Q2 矩阵挂机）；
+本地 5080 跑短实验（Stage-1、检查、E2E-0 调通）。
 
 ---
 
-## Phase 2 — DCS + TD-MPC2 集成
+## Week 1（现在）— 生死检查 + 管线并行
 
-详细步骤见 `PHASE2_PLAN.md`（cowork 出）。摘要：
+### W1.1 🔴 最优先：Stage-1 on DCS + 连通性检查（1 天，5080）
 
-### P2.1 环境搭建（1 天）
-- fork `github.com/nicklashansen/tdmpc2` 到 `third_party/tdmpc2`
-- 装 dm_control + distracting_control（DAVIS-2017 背景视频）
-- 判据：TD-MPC2 官方 pixel config 在 walker-walk (clean) 跑 100K steps，
-  return ≥ 500（官方 ~700@500K，100K 打半即可确认管线）
+**这是唯一能杀死故事的实验，先跑。**
 
-### P2.2 Baseline 数字（2-3 天，挂机）
-- TD-MPC2-pixel 在 {walker-walk, cheetah-run} × {clean, distracting-easy}
-  各 500K steps × 3 seeds
-- 这些数字直接进论文 Table IV/V 的 TD-MPC2-pixel 行（替换 ○ 估算值）
-- 判据：clean walker-walk final return 650-750（对齐官方），不对齐先停
+```
+1. 装 dm_control + distracting_control + DAVIS（PHASE2_PLAN §2）
+2. walker-walk clean + easy 各采 25K 帧（random policy，含 qpos/qvel，clip 结构）
+3. Stage-1 定型配方训练（connectivity 路由）
+4. 检查（无 GT objectness，用 proxy）：
+   a. 渲染 slot alpha 图（规则4：先看数据）——walker 躯干/四肢是否有专属 slot
+   b. walker 区域 proxy 掩膜：clean 背景下 walker 是唯一运动源，
+      用帧差 + 形态学闭运算得 walker 掩膜（clean 上可靠；easy 上不用）
+   c. router fast slots 对 walker 掩膜的富集度
+```
 
-### P2.3 HippoAct encoder 接入（2-3 天）
-- 按 PHASE2_PLAN.md 的接口方案替换 h_phi
-- Stage-1 预训练：用 DCS 环境 random policy 采 50K 帧（clean + easy 混合），
-  跑定型配方
-- **训练前置检查（沿用 CP6 纪律）**：在 DCS 帧上测 connectivity 信号对
-  walker 身体部件的富集度；DCS 没有物体 annotations，用 walker 的
-  几何 proxy（躯干/四肢在画面中的已知运动区域）或人工标 50 帧
-- 判据：Stage-1 slot alpha 图上 walker 身体有专属 slot，背景（视频）被
-  弥散 slot 覆盖且 router 判 slow
+| 判据 | 通过 | 失败 |
+|---|---|---|
+| walker 富集 ≥ 3×（fast slots） | → W1.2 继续 | 停，带 slot 图回 cowork |
+| 视频背景（easy）被判 slow 为主 | 记录数字进论文 | 若背景紧凑物被判 fast，如实记录（这本身是 §V 已预告的 failure mode，量化它） |
 
-### P2.4 端到端对比（1 周挂机）
-- HippoAct vs TD-MPC2-pixel，walker-walk distracting-easy，500K × 3 seeds
-- 判据（软）：HippoAct ≥ pixel 的 90%（sample efficiency 打平即可，
-  主故事在 Q2 robustness）
-- 判据（硬，Q2 preview）：easy 训练 → hard zero-shot，HippoAct retention
-  显著高于 pixel（这是论文核心 claim 的第一个真实数据点）
+### W1.2 并行挂机（A5000 ×2 卡）：TD-MPC2-pixel baseline
 
-### 常备规则（不变）
-1. 训练前先量数据（CP6 前置检查两条是范本）
-2. 单变量原则
+walker-walk + cheetah-run，clean + distracting-easy，500K steps × 3 seeds
+= 12 runs，2 卡 ~4 天。判据：clean walker 500K return 650-750（对齐官方）。
+**这些数字直接进 Table V。**
+
+### W1.3 并行（A5000 ×1 卡）：DrQ-v2 baseline 同矩阵
+
+官方实现，同 12 runs。作为 model-free 代表。
+
+---
+
+## Week 2 — 最小端到端
+
+### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
+
+**一次一个变量：z = flatten(S_fg) ⊕ q_t，无 binding transformer、无辅助 loss。**
+
+```
+adapter 只做：Stage-1 ckpt 加载 → encode_frame → argmax 路由 → fast slots
+→ flatten ⊕ qpos/qvel → MLP → z (256)
+```
+
+判据：walker-walk easy 500K return ≥ 0.8 × TD-MPC2-pixel。
+过 → W2.2；不过 → 查 adapter（对照清单在 PHASE2_PLAN §6），仍不过带数字回 cowork。
+
+### W2.2 E2E-1：+ Binding Transformer（c_t，无 L_pred/L_align）
+### W2.3 E2E-2：+ L_pred + L_align（完整方法）
+
+每级 vs 前级 = build-up ablation，直接填 Table IX 的 A5/A7 行。
+E2E-1/2 若无增益也如实报告（§IV.I 有先例，reviewer 吃这套诚实）。
+
+---
+
+## Week 3-4 — Q2 主矩阵（A5000 挂满）
+
+**论文主图**：{walker-walk, cheetah-run, hopper-hop} × {HippoAct(最优级),
+TD-MPC2-pixel, DrQ-v2} × 3 seeds，easy 训练 → {none, easy, hard} zero-shot 评测。
+
+= 27 训练 runs（12 已在 W1 完成）+ 评测。4 卡 ~1.5 周。
+
+判据（论文成立线）：HippoAct retention(hard/none) 显著高于两个 baseline
+（目标 ≥0.65 vs pixel ~0.45-0.50；参照 Table V 的 ○ 估值）。
+
+**每个 run 启动前**：预期数字写进 TODO_RESULT 预注册段（新纪律）。
+
+---
+
+## Week 4-5 — Robotics 相关性 + 补充
+
+### W4.1 Meta-World：pick-place-v2 + drawer-open-v2（A5000）
+Stage-1 on MW 帧 → E2E 最优配置 vs TD-MPC2-pixel，1M steps × 3 seeds。
+判据：成功率 ≥ 0.9× pixel（打平即可，叙事是"表征可迁移到操作任务"）。
+
+### W4.2 补充 ablation（Table IX 剩余行，A6/A11 已由 synthetic 数据支撑）
+A1（CNN 换 DINOv2）、A2（去 slot）在 walker-easy 上各 3 seed。
+
+### W4.3 内存/延迟测量（Table X 实测替换估值）——半天
+
+---
+
+## Week 5-6 — 写作冲刺（cowork 主导）
+
+- 全部 ⧫/○ 替换为实测；图定稿（Fig.4 slot alpha on DCS hard 是主视觉）
+- §V limitation 补：真机/Q3/Q5 移入 future work 的措辞
+- 内审 → 改稿 → 提交
+
+---
+
+## 失败预案
+
+| 失败点 | 预案 |
+|---|---|
+| W1.1 连通性在 walker 不成立 | 停。故事重定位候选：(a) 只做操作类场景（MW/真机桌面，物体紧凑假设更合理）(b) connectivity+motion 混合信号。回 cowork 定 |
+| W2.1 E2E-0 < 0.8× | 表征-RL 接口问题，逐项查 PHASE2_PLAN §6 清单；仍不过则 Q2 改用 frozen-encoder linear-probe 类评测降级论证 |
+| Q2 retention 无显著差异 | 论文主图改为反转发现 + 协议（贡献 1-3 独立成立），Q2 如实报告为 mixed |
+| 时间不够 | 按 experiment_sanity_review §3 优先级表从底往上砍 |
+
+---
+
+## 常备规则（v5，新增第 7 条）
+
+1. 训练前先量数据
+2. 单变量原则（E2E 三级递进是其体现）
 3. 判据前置
-4. **先看数据本身**——新度量投产前渲染出来目视（GT.7 规则 1）
-5. **真值用生成过程的已知量，不从观测反推**（GT.7 规则 2）
+4. 先渲染数据再信度量
+5. 真值来自生成过程，不从观测反推
 6. 卡住带数据回 cowork
-
----
-
-## 论文侧任务（cowork 负责，记录在此供对照）
-
-- [ ] §III.D.3 完全重写：路由信号从时间不变性 → alpha 空间连通性；
-      叙事从 "slow/fast temporal" 调整为 "object/background via spatial
-      compactness"，保留 slow/fast 术语但依据改写
-- [ ] §III 设计前提修改：GT.3 的机制发现（时间不变性 = 跟踪成功的标志）
-      作为 motivation 写进去——"为什么不用时间信号"现在有完整的实证回答
-- [ ] §IV.G Diagnostic Protocol 成型：GT.7 两条规则 + oracle 对照 +
-      "上界低于实测=度量bug" + SNR 分解，素材全在 TODO_RESULT.md
-- [ ] §IV.I negative results 重写：删守恒/瞬态（GT.2 推翻），
-      换成「时间类路由信号的系统性失效」（GT.3/GT.4，更强的结果）
-- [ ] §V limitation：尺寸混淆（大物体弱化）、连通性在 cluttered 场景的
-      未验证性
-- [ ] Table VII：exclusivity 0.43 替换旧的 purity 目标 0.86；
-      coverage 1.000 + 富集 18.78× 作为主定位指标
+7. **GPU-天 > 1 的 run，启动前在 TODO_RESULT 写预注册段（预期数字+判据）**
 
 ## 汇报格式（不变）
 
