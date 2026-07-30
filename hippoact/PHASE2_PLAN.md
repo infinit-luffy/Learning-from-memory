@@ -26,18 +26,39 @@ Fork 方式：`git clone` 后记录 commit hash 到 `third_party/tdmpc2/PINNED`�
 ## 2. 环境安装
 
 ```bash
-pip install dm_control==1.0.14 gymnasium
-# distracting_control: 用 Google research 官方或 pip 安装的社区包
-pip install distracting-control  # 若无则 vendored 到 experiments/dcs/
-# DAVIS 2017 背景视频 (~800MB)
+# 注意: 不要 pin dm_control==1.0.14 —— 见下方坑 1
+pip install dm_control gymnasium "numpy<2.0"
+pip install distracting-control
+pip install opencv-python-headless          # distracting_control 依赖 cv2 但未声明
+python tools/dcs/patch_distracting_control.py   # 修 tex_rgb -> tex_data, 见坑 3
+
+# DAVIS 2017 背景视频 (~795MB, 解压 819MB, 90 个序列)
 wget https://data.vision.ee.ethz.ch/csergi/share/davis/DAVIS-2017-trainval-480p.zip
-unzip -d experiments/dcs/davis/
+unzip DAVIS-2017-trainval-480p.zip -d /var/tmp/hippoact_dcs/davis/
+# background_dataset_path 要给到含视频序列的那一层:
+#   /var/tmp/hippoact_dcs/davis/DAVIS/JPEGImages/480p
 ```
 
-坑预告：
-- dm_control 需要 EGL 渲染：`export MUJOCO_GL=egl`（服务器无显示器必需）
-- distracting_control 的 background 视频路径要绝对路径
-- torch 2.11 + dm_control 1.0.14 的 numpy 版本冲突：pin numpy<2.0 如果报错
+坑预告（1-3 为 W1.1 实测新增，原预告的 EGL / 绝对路径 / numpy 均已证实）：
+
+1. **`dm_control==1.0.14` 与任何 mujoco 版本都配不上。** 它需要
+   `MjModel.bvh_geomid`；实测 mujoco 3.1.6 / 3.0.1 / 3.0.0 均无该字段。
+   解法：升级 dm_control 到最新版，保留 mujoco 3.11.0。
+2. **`distracting_control` 依赖 `cv2` 但未在依赖里声明。** 装
+   `opencv-python-headless`，不要装 `opencv-python`（无显示器机器上会拉 GUI 依赖）。
+3. **`distracting_control` 用 `model.tex_rgb` 写天空盒，该字段在新版 mujoco
+   改名为 `tex_data`。** 实测天空纹理 `nchannel=3, adr=0`，布局与旧版一致，
+   故为纯改名。用 `tools/dcs/patch_distracting_control.py`（幂等）。
+4. EGL 渲染：`export MUJOCO_GL=egl`（服务器无显示器必需）—— 已证实必需。
+5. DAVIS 路径要绝对路径，且要给到 `DAVIS/JPEGImages/480p` 这一层。
+6. `numpy<2.0`（distracting_control 间接依赖老 gym）；实测不影响
+   torch 2.11+cu128 的 CUDA 可用性。
+
+**分割真值**：`env.physics.render(..., segmentation=True)` 返回 `(H,W,2)` 的
+`(geom_id, type)`。walker-walk 中 `geom 0=floor`、`1-7=walker 部件`、`-1=天空`，
+故 walker 掩膜 = `geom_id >= 1`，**精确且在 easy 上同样有效**（天空盒被 DAVIS
+替换后分割仍返回 −1）。优先用它，不要用帧差 + 闭运算的 proxy —— 后者会把
+地板倒影一并圈入，且在 easy 上完全失效。
 
 ## 3. Encoder 接入设计
 

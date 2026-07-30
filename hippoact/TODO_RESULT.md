@@ -507,6 +507,107 @@ M1/M1b matching）都是在为「跨帧身份」这个前提搭地基。**该前
 
 ---
 
+# W1.1 — Stage-1 on DCS：connectivity 路由在真实渲染场景上成立
+
+> 「唯一能杀死故事的实验」。CP6 的 connectivity 路由是在合成圆盘上验证的，
+> 那里我明确标注了「未排除形状混淆」——walker 是细长四肢结构、占画面 7.1%，
+> 与紧凑圆盘差别很大，正是该风险的直接检验。
+> 数据：walker-walk，clean + easy(DAVIS) 各 25K 帧，random policy，含 qpos/qvel。
+> 配方沿用 CP6 定型：`slow_signal=alpha_connectivity` / `shared init` /
+> `slot_iters 3` / `slot_dim 128`，clean+easy 合训（48000 对）。
+> 脚本：`tools/dcs/{collect_frames,patch_distracting_control,walker_mask,walker_enrichment}.py`
+
+## W1.1.1 判据：通过
+
+| | fast slots 富集 | 判据 ≥3.0 | Cohen's d | 秩 AUC | slow slots 富集 |
+|---|---|---|---|---|---|
+| clean | **4.15×** | ✅ | +2.262 | 0.943 | 0.20 |
+| easy | **4.26×** | ✅ | +1.844 | 0.833 | 0.33 |
+
+对照通过：oracle slot 富集 9.54，uniform slot **1.00**（定义上必然为 1.00）。
+walker 占画面 7.06%，故 4.15× 等价于 fast slots 有约 29% 的 alpha 质量落在 walker 上。
+
+**形状混淆风险未兑现**：细长关节结构上 connectivity 依然有效。
+
+## W1.1.2 第 4d 步：easy 背景的路由分布
+
+```
+router 判 fast 占比:  clean 0.677   easy 0.627
+slow slots 富集度:    clean 0.20    easy 0.33
+```
+
+视频背景**主要被判 slow**，且是在背景贡献了 47.9% 像素变化的条件下做到的
+（clean 仅 12.7%）。这是 Q2 的关键前提。
+
+### 失败模式（§V 预告的那个，已量化）
+
+easy 相对 clean：Cohen's d **2.262 → 1.844**（−0.42），AUC **0.943 → 0.833**，
+slow slots 富集 **0.20 → 0.33**。背景中的紧凑物体确实会被误判 fast。
+slot 图中可见（s12 的注意力块落在背景区）。**这组数字应写入 §V。**
+
+## W1.1.3 一个直接支持 CP6 设计决定的实测
+
+```
+相邻帧变化像素占比:  clean 0.127   easy 0.479
+```
+
+CP6 中放弃 `pixel_motion`（合成上 +0.727，强于 connectivity 的 +0.623）而选
+connectivity，理由是前者会在 DCS 视频背景上崩。**现在这是实测的**：easy 下
+背景贡献近半像素变化，pixel_motion 路由会把背景整体判成 fast。
+
+## W1.1.4 两处偏离原计划（均为改进）
+
+**(1) 用 MuJoCo 分割渲染替代 proxy 掩膜。**
+TODO 第 4b 步指定「clean 帧差 + 闭运算」。照做并渲染检查后发现它把**地板倒影
+和一条横线**一并圈入。而 dm_control 原生支持分割渲染：
+
+```
+geom 0 = floor    geom 1-7 = torso/thighs/legs/feet    id = -1 = 天空
+```
+
+walker 掩膜 = `geom_id >= 1`，精确、无倒影、无形态学操作。**天空盒被 DAVIS
+替换后分割仍返回 −1，故 easy 上同样精确**——判据表中「easy 上不用掩膜」的
+限制不再成立，第 4d 步得以定量而非定性。
+这是 GT.7 规则 2（真值优先用生成过程的已知量）的直接应用。
+
+**(2) 独立的精确真值评估集。** clean / easy 各 2500 帧，`--save-segmentation`，
+**同 seed 故物理完全相同**（两边 walker 占画面均为 0.0706）——姿态一致、
+仅背景不同的受控对照。训练仍用 25K×2。
+
+## W1.1.5 环境安装：三个未预告的坑
+
+均已修，`PHASE2_PLAN.md §2` 已回填。
+
+1. **`dm_control==1.0.14` 的 pin 必须去掉。** 它需要 `MjModel.bvh_geomid`；
+   实测 mujoco 3.1.6 / 3.0.1 / 3.0.0 均无该字段。解法是升级 dm_control 到最新版、
+   保留 mujoco 3.11.0。
+2. **`distracting_control` 依赖 `cv2` 但未声明** → `opencv-python-headless`
+   （非 `opencv-python`，避免无显示器机器上拉 GUI 依赖）。
+3. **`distracting_control` 与现代 mujoco 不兼容**：用 `model.tex_rgb` 写天空盒，
+   该字段已改名 `tex_data`。实测天空纹理 `nchannel=3, adr=0`，布局与旧版一致，
+   故为纯改名。写成幂等补丁 `tools/dcs/patch_distracting_control.py`。
+4. DAVIS 路径须给到 `DAVIS/JPEGImages/480p`（含视频序列的那一层）。
+
+## W1.1.6 一个自查出的度量 bug
+
+首次计算富集度时把掩膜归一化成和为 1 的分布，导致全部数值缩小 `mp.sum()=17.9` 倍
+（clean FAST 显示 0.24 而非 4.15），几乎误报「不通过」。
+
+**由 uniform 对照抓出**：它算得 0.056 而非定义上必然的 1.00。
+该对照规则在合成阶段已救过一次（oracle 低于实测），此为第二次。
+→ 强化 Diagnostic Protocol：**任何富集/分离类度量，uniform 对照必须精确等于
+其解析值，不能只看「数量级合理」。**
+
+## W1.1.7 采集脚本的两个设计决定
+
+- 用 `env.physics.render` 而非 pixels wrapper，以保留 `qpos/qvel`（W1.1 要求存，
+  后续 P2 的 proprio 侧直接可用）；干扰作用于 physics/skybox，背景照常出现在渲染中
+- 「重建环境」（换 DAVIS 视频，代价高）与「重置回合」（换姿态，代价低）分离：
+  首版每 8 clip 才重置，随机策略下 walker 约 25 步倒地，导致 7/8 的帧为倒地姿态。
+  渲染检查发现后改为每 2 clip 重置
+
+---
+
 ## 附：可复用诊断脚本
 
 全部已整理进 `hippoact/tools/diagnostics/`，含 README（度量约定、参考数值、已知局限）。
@@ -533,3 +634,12 @@ M1/M1b matching）都是在为「跨帧身份」这个前提搭地基。**该前
 | `gt_router.py` | **P1 核心测量**：router 慢快划分 vs 真值，含 oracle/uniform 对照 |
 | `gt_target.py` | 精确真值下对比三个候选 L_slow target |
 | `gt_signal_search.py` | 搜索尺度不变的路由信号，含尺寸混淆检验 |
+
+DCS 相关脚本在 `hippoact/tools/dcs/`：
+
+| 脚本 | 用途 |
+|---|---|
+| `collect_frames.py` | DMC / DCS 采帧，clip 结构 + qpos/qvel + 可选精确分割掩膜 |
+| `patch_distracting_control.py` | 幂等修复 `tex_rgb` → `tex_data`（现代 mujoco 兼容）|
+| `walker_mask.py` | 帧差 + 闭运算的 proxy 掩膜（已被分割渲染取代，保留作对照）|
+| `walker_enrichment.py` | W1.1 判据：fast slots 对 walker 的富集度 + oracle/uniform 对照 |
