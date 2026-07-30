@@ -40,7 +40,77 @@ P1/P2 判决否掉了"init 侧修复"整条路线。新路线基于 TODO_RESULT 
 
 ---
 
-## Step M1 — Tracking-by-Matching probe（eval-only，无训练）
+## ~~Step M1 — 已完成~~（结果见 TODO_RESULT.md M1 节）
+
+判决：matched tracking 0.564 < 0.60（sweep 已穷尽，跨度 0.036）。
+根因定位：**分解一致性**——相邻帧最优对齐余弦 0.689，双射天花板 0.837。
+匹配算法排除，代价函数排除。→ 转 Step M1b。
+
+---
+
+## Step M1b — 共享 init + Matching probe（eval-only，30 分钟）
+
+M1 用"每帧独立 fresh init"是继承"shared init 冻结分区"的教训——但那个教训
+针对的是 **index-identity tracking**。现在 identity 由 Hungarian 事后恢复，
+冻结分区不再是反对理由，反而正是提高分解一致性的手段。
+
+**唯一改动**：pair 内两帧共享同一 init（`sample_init` 一次，两帧同传），
+其余全部沿用 M1 最佳配置（w=(0.5,0.5), topk=64）。
+
+预期：对齐余弦 0.689 → 0.85+；天花板 0.837 → 0.9+；捕获率上升。
+物体不需要被"同一个 slot"跟——装着 disk 特征的 slot 由 feature cosine 找到。
+匹配负责 identity，共享 init 负责划分一致，各司其职。
+
+### 判据
+
+| matched tracking | 结论 → 行动 |
+|---|---|
+| **≥ 0.60** | Matching 路线成立（配方 = shared init + Hungarian）→ 回 cowork 拿 M2 patch |
+| 0.55–0.60 | 对齐余弦如果 ≥0.85 说明一致性已修但捕获还差 → 停，带对齐/天花板/捕获率三个数回 cowork |
+| < 0.55 | → Step M1c |
+
+**顺带记录**：对齐余弦、双射天花板、归一化捕获率（用 m1_oracle.py，
+注意其中 oracle 的修正版实现）。
+
+---
+
+## Step M1c — per-slot learned queries 训练（仅当 M1b 不过，40 分钟）
+
+`git pull` 拿到 `slot_query_mode: learned`（BO-QSA 风格：每 slot 独立可学习
+query + 近零噪声，分解成为图像的近确定函数——从根上解决划分漂移，且不要求
+编码器学跨帧任务，无权重损害风险）。
+
+```bash
+python -c "
+import yaml
+c = yaml.safe_load(open('configs/default.yaml'))
+c['encoder']['slot_query_mode'] = 'learned'
+c['train']['slot_init_mode'] = 'shared'     # learned queries 下 shared/random 差异极小
+c['loss']['lambda_slow'] = 0.0              # router target 等 M2 再上
+yaml.dump(c, open('configs/learned_queries.yaml', 'w'))
+"
+python scripts/pretrain_stage1.py --config configs/learned_queries.yaml \
+    --data-dir data/frames/synthetic --wandb --run-name stage1_m1c_learned_queries
+```
+
+训练完在 `synthetic_diag` 上重跑 M1 probe（fresh "init" 现在近似确定，
+共不共享无所谓）。
+
+### 判据
+
+| 指标 | 门槛 |
+|---|---|
+| 对齐余弦 | ≥ 0.85 |
+| localization | ≥ 0.45（learned queries 不该损害定位，若 <0.4 停） |
+| matched tracking | ≥ 0.60 |
+
+三条都过 → 回 cowork 拿 M2。任一不过 → 停，带全套数字回 cowork 做
+synthetic 终审（此时匹配、一致性、init、loss 四个层面全部试过，
+诊断链完整，够写 negative-result 终审报告）。
+
+---
+
+## 旧 M1 详细协议（归档，M1b/M1c 复用其度量与脚本约定）
 
 用 **shared-init checkpoint**（定位 0.510 那个）：
 

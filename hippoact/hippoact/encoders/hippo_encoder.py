@@ -50,6 +50,7 @@ class HippoActEncoder(nn.Module):
         slot_hidden: int = 256,
         router_hidden: int = 64,
         gumbel_tau_init: float = 1.0,
+        slot_query_mode: str = "sampled",   # {"sampled", "learned"}
     ):
         super().__init__()
         self.num_slots = num_slots
@@ -66,6 +67,7 @@ class HippoActEncoder(nn.Module):
             input_dim=self.dino.feat_dim,
             iters=slot_iters,
             hidden_mlp=slot_hidden,
+            learned_queries=(slot_query_mode == "learned"),
         )
         self.slot_decoder = SlotFeatureDecoder(
             slot_dim=slot_dim,

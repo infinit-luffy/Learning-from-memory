@@ -12,6 +12,11 @@ encoder:
   slot_dim: 128
   slot_iters: 3
   slot_hidden: 256
+  # slot_query_mode: "sampled" = original shared (mu, sigma) with per-forward
+  # noise (decomposition NOT stable across inits — M1 bottleneck);
+  # "learned" = BO-QSA-style per-slot learned queries, near-deterministic
+  # decomposition (M1c route).
+  slot_query_mode: sampled
 
   # Router
   router_hidden: 64

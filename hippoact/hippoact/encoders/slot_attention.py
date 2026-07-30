@@ -16,6 +16,7 @@ class SlotAttention(nn.Module):
         iters: int = 3,
         hidden_mlp: int = 256,
         eps: float = 1e-8,
+        learned_queries: bool = False,
     ):
         super().__init__()
         self.num_slots = num_slots
@@ -23,14 +24,29 @@ class SlotAttention(nn.Module):
         self.iters = iters
         self.eps = eps
         self.scale = slot_dim ** -0.5
+        self.learned_queries = learned_queries
 
         self.norm_input = nn.LayerNorm(input_dim)
         self.norm_slots = nn.LayerNorm(slot_dim)
         self.norm_pre_ff = nn.LayerNorm(slot_dim)
 
-        # Learnable slot initialization
-        self.slots_mu = nn.Parameter(torch.randn(1, 1, slot_dim) * 0.02)
-        self.slots_logsigma = nn.Parameter(torch.zeros(1, 1, slot_dim))
+        if learned_queries:
+            # BO-QSA-style per-slot learned queries: each slot has its own
+            # learned init vector, near-zero sampling noise. The decomposition
+            # becomes a (near-)deterministic function of the image — adjacent
+            # frames converge to consistent partitions (fixes the 0.689
+            # alignment-cosine bottleneck found in M1) without asking the
+            # encoder to learn cross-frame identity (no weight-damage risk).
+            self.slots_mu = nn.Parameter(torch.randn(1, num_slots, slot_dim) * 0.5)
+            self.slots_logsigma = nn.Parameter(
+                torch.full((1, num_slots, slot_dim), -5.0)
+            )
+        else:
+            # Original: one shared (mu, sigma); symmetry broken purely by
+            # per-forward sampling noise. Decomposition is then NOT a stable
+            # function of the image (M1 finding).
+            self.slots_mu = nn.Parameter(torch.randn(1, 1, slot_dim) * 0.02)
+            self.slots_logsigma = nn.Parameter(torch.zeros(1, 1, slot_dim))
 
         self.to_q = nn.Linear(slot_dim, slot_dim, bias=False)
         self.to_k = nn.Linear(input_dim, slot_dim, bias=False)

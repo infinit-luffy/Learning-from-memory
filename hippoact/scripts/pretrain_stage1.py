@@ -133,6 +133,7 @@ def build_encoder(cfg) -> HippoActEncoder:
         slot_hidden=e.slot_hidden,
         router_hidden=e.router_hidden,
         gumbel_tau_init=e.gumbel_tau_init,
+        slot_query_mode=str(e.get("slot_query_mode", "sampled")),
     )
 
 
