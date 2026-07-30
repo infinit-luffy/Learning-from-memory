@@ -30,6 +30,8 @@ def main():
     ap=argparse.ArgumentParser()
     ap.add_argument("--config",required=True); ap.add_argument("--ckpt",required=True)
     ap.add_argument("--data-dir",required=True); ap.add_argument("--n-clips",type=int,default=400)
+    ap.add_argument("--shared-init",action="store_true",
+                    help="pair 内两帧共享同一 init (Step M1b); 默认每帧独立 fresh init (M1)")
     args=ap.parse_args()
     cfg=load_config(args.config); size=cfg.encoder.image_size
     enc=build_encoder(cfg).cuda()
@@ -39,7 +41,7 @@ def main():
     nm=transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
     base=transforms.Compose([transforms.Resize(size),transforms.CenterCrop(size),transforms.ToTensor()])
     res={k:[] for k in ("greedy_oracle","hungarian_oracle","best_learned","identity","random")}
-    partition_cos, used = [], 0
+    partition_cos, loc, used = [], [], 0
     for c in sorted(glob.glob(args.data_dir+"/clip_*"))[:args.n_clips]:
         fs=sorted(glob.glob(c+"/*.png"))
         if len(fs)<4: continue
@@ -51,14 +53,19 @@ def main():
         with torch.no_grad():
             g1,g2=enc.dino(nm(f[1])[None].cuda()),enc.dino(nm(f[2])[None].cuda())
             N=g1.shape[1]; gg=int(round(N**0.5))
-            s1=SA(g1,slots_init=SA.sample_init(1,device=g1.device,dtype=g1.dtype))
-            s2=SA(g2,slots_init=SA.sample_init(1,device=g2.device,dtype=g2.dtype))
+            if args.shared_init:
+                init = SA.sample_init(1,device=g1.device,dtype=g1.dtype)
+                s1, s2 = SA(g1,slots_init=init), SA(g2,slots_init=init)
+            else:
+                s1=SA(g1,slots_init=SA.sample_init(1,device=g1.device,dtype=g1.dtype))
+                s2=SA(g2,slots_init=SA.sample_init(1,device=g2.device,dtype=g2.dtype))
             _,a1=enc.slot_decoder(s1); _,a2=enc.slot_decoder(s2)
         A1=a1[0]/(a1[0].sum(-1,keepdim=True)+1e-8)
         A2=a2[0]/(a2[0].sum(-1,keepdim=True)+1e-8)
         K=A1.shape[0]
         o1,o2=pool_mask(obj1,gg,A1.device),pool_mask(obj2,gg,A1.device)
         on1=(A1*o1).sum(-1)*N
+        loc.append((on1>2.0).float().mean().item())
         sel=(on1>2.0).nonzero().flatten()
         if len(sel)==0: continue
         base_mass=(A1[sel]*o2).sum(-1)*N
@@ -86,7 +93,9 @@ def main():
         sim=(u@v.t()).cpu().numpy()
         _,cm=linear_sum_assignment(-sim)
         partition_cos.append(float(sim[np.arange(K),cm].mean()))
-    print(f"clips_used={used}")
+    print(f"clips_used={used}   shared_init={args.shared_init}")
+    print(f"localization (on-object 交集) = {np.mean(loc):.3f}"
+          f"    [参照 shared-init ckpt = 0.510]")
     print()
     for k in ("random","identity","best_learned","hungarian_oracle","greedy_oracle"):
         print(f"  {k:<18} = {np.mean(res[k]):.3f}")

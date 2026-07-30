@@ -15,6 +15,7 @@ pipeline sanity check (not enough to produce a strong representation).
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 import numpy as np
@@ -78,7 +79,8 @@ def _paint_rect(img: np.ndarray, rect) -> np.ndarray:
 
 def make_clip(size: int, rng: np.random.Generator, clip_len: int,
               disk_speed: float = 12.0,
-              min_radius: int = 8, max_radius: int = 22) -> list[np.ndarray]:
+              min_radius: int = 8, max_radius: int = 22,
+              return_annotations: bool = False):
     """Return a list of ``clip_len`` frames with:
       - background: fixed across the clip (should be routed slow)
       - rectangle 'gripper base': fixed across the clip (should be slow)
@@ -89,6 +91,15 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int,
     frame, above the patch-quantization threshold. The previous default of
     3 px/frame yielded ~0.27 patch/frame, i.e. motion vanished inside the
     patch grid before reaching Slot Attention.
+
+    With ``return_annotations=True`` also returns exact per-frame object
+    geometry ``[[{cx, cy, r}, ...], ...]``. Use this instead of inferring
+    object masks from pixel differences: |cur - prev| covers the UNION of the
+    old and new positions, and the intersection over consecutive differences
+    (used before annotations existed) degenerates to thin edge slivers when
+    displacement < diameter -- median 670 px against a 616-2124 px disk, with
+    a 141 px 10th percentile. Every localization / tracking number measured
+    against that mask is unreliable.
     """
     bg_fn = BG_FNS[rng.integers(0, len(BG_FNS))]
     bg = bg_fn(size, rng)
@@ -113,7 +124,7 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int,
         vx, vy = rng.normal(0.0, disk_speed, size=2)
         velocities.append((float(vx), float(vy)))
 
-    frames = []
+    frames, annotations = [], []
     for t in range(clip_len):
         img = bg.copy()
         img = _paint_rect(img, rect)
@@ -123,6 +134,14 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int,
         ]
         img = _paint_disks(img, disks_t)
         frames.append(np.clip(img, 0, 1))
+        annotations.append([
+            {"cx": float(d[0]), "cy": float(d[1]), "r": int(d[2])}
+            for d in disks_t
+        ])
+    if return_annotations:
+        rect_ann = None if rect is None else {
+            "x0": rect[0], "y0": rect[1], "w": rect[2], "h": rect[3]}
+        return frames, {"size": size, "disks": annotations, "rect": rect_ann}
     return frames
 
 
@@ -151,6 +170,11 @@ def main():
                          "diagnostics use >= 14 so displacement < diameter "
                          "and motion(t-1,t) ∩ motion(t,t+1) stays non-empty.")
     ap.add_argument("--max-radius", type=int, default=22)
+    ap.add_argument("--save-annotations", action="store_true",
+                    help="write exact per-frame object geometry to "
+                         "annotations.json in each clip dir. Strongly "
+                         "recommended for any diagnostic run -- masks inferred "
+                         "from pixel differences are edge slivers, not objects.")
     ap.add_argument("--flat", action="store_true",
                     help="Legacy: dump all frames flat into --out (no temporal structure)")
     args = ap.parse_args()
@@ -175,13 +199,17 @@ def main():
         for c in range(args.n_clips):
             clip_dir = out / f"clip_{c:06d}"
             clip_dir.mkdir(exist_ok=True)
-            for t, frame in enumerate(
-                make_clip(args.size, rng, args.clip_len, disk_speed=args.disk_speed,
-                          min_radius=args.min_radius, max_radius=args.max_radius)
-            ):
+            result = make_clip(
+                args.size, rng, args.clip_len, disk_speed=args.disk_speed,
+                min_radius=args.min_radius, max_radius=args.max_radius,
+                return_annotations=args.save_annotations)
+            frames, ann = result if args.save_annotations else (result, None)
+            for t, frame in enumerate(frames):
                 Image.fromarray((frame * 255).astype(np.uint8)).save(
                     clip_dir / f"frame_{t:04d}.png"
                 )
+            if ann is not None:
+                (clip_dir / "annotations.json").write_text(json.dumps(ann))
             if (c + 1) % 100 == 0:
                 print(f"  wrote {c + 1} / {args.n_clips} clips  "
                       f"({(c + 1) * args.clip_len} / {total} frames)")
