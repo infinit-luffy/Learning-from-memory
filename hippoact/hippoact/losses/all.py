@@ -25,33 +25,39 @@ def slow_temporal_loss_soft(
     slots_prev: torch.Tensor,       # (B, K, D)  previous frame slots (matched)
     router_logits: torch.Tensor,    # (B, K, 2)  pre-softmax router logits
     temperature: float = 1.0,
+    low_q: float = 0.10,
+    high_q: float = 0.90,
 ) -> torch.Tensor:
-    """Soft-target BCE using MAD-standardized per-slot temporal variance.
+    """Soft-target BCE using quantile min-max normalized temporal variance.
 
-    Removes the fixed-fraction assumption of ``slow_temporal_loss`` (which
-    forces a quantile-based binary label): each slot's target is a continuous
-    function of its own diff, so slots with genuinely ambiguous motion get
-    target ≈ 0.5 and receive zero gradient rather than being force-labeled.
+    Rationale for quantile min-max over the previous MAD sigmoid: the diff
+    distribution on scenes with a small foreground fraction is strongly
+    bimodal (K-M background slots near 0, M motion slots much higher). Under
+    that structure:
 
-    The CE floor is honest: with per-slot target ``t``, min CE = H(t). For
-    ``t = 0.5`` this is ln 2 ≈ 0.693, but *only for slots whose true motion
-    signal is ambiguous* — as slot decomposition sharpens, targets migrate to
-    0 or 1 and the total loss keeps descending. In practice a stalled
-    ``L_slow`` under this variant is decisive evidence that ``diff`` itself
-    carries no motion signal (e.g. dominated by slot-init noise; see
-    ``SlotAttention.sample_init``).
+      - torch.median falls on the low peak → MAD collapses to 0 (half of the
+        deviations are literally zero), which force-saturates the sigmoid.
+      - Background slots then get target = sigmoid(0/eps) = 0.5, i.e.
+        'ambiguous', when they should get target = 0 ('definitely slow').
+
+    Quantile min-max is bimodal-safe: 10th percentile lands in the low peak,
+    90th percentile in the high peak, and the resulting rescale produces
+    target ≈ 0 for background and target ≈ 1 for motion. Slots between the
+    two peaks are honestly ambiguous and get target in (0, 1).
+
+    Temperature: 1.0 uses the raw rescaled target; > 1 sharpens toward 0/1;
+    < 1 softens toward 0.5.
     """
     with torch.no_grad():
         diff = (slots_t - slots_prev).pow(2).sum(dim=-1)              # (B, K)
-        d_med = diff.median(dim=-1, keepdim=True).values              # (B, 1)
-        # MAD (median absolute deviation): robust to the long-tail from
-        # 1-2 truly moving slots.
-        d_mad = (diff - d_med).abs().median(dim=-1, keepdim=True).values + 1e-6
-        target_fast = torch.sigmoid((diff - d_med) / d_mad * temperature)
+        d_lo = diff.quantile(low_q,  dim=-1, keepdim=True)            # (B, 1)
+        d_hi = diff.quantile(high_q, dim=-1, keepdim=True)
+        target = ((diff - d_lo) / (d_hi - d_lo + 1e-6)).clamp(0.0, 1.0)
+        if temperature != 1.0:
+            # Push toward extremes (T>1) or flatten toward 0.5 (T<1).
+            target = torch.sigmoid((target - 0.5) * 4.0 * temperature)
     log_p = F.log_softmax(router_logits, dim=-1)
-    return -(
-        target_fast * log_p[..., 1] + (1.0 - target_fast) * log_p[..., 0]
-    ).mean()
+    return -(target * log_p[..., 1] + (1.0 - target) * log_p[..., 0]).mean()
 
 
 def slow_temporal_loss(

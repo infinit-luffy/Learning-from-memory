@@ -76,11 +76,18 @@ def _paint_rect(img: np.ndarray, rect) -> np.ndarray:
     return img
 
 
-def make_clip(size: int, rng: np.random.Generator, clip_len: int) -> list[np.ndarray]:
+def make_clip(size: int, rng: np.random.Generator, clip_len: int,
+              disk_speed: float = 12.0) -> list[np.ndarray]:
     """Return a list of ``clip_len`` frames with:
       - background: fixed across the clip (should be routed slow)
       - rectangle 'gripper base': fixed across the clip (should be slow)
-      - disks: initial position + small per-step velocity (should be fast)
+      - disks: initial position + per-step velocity ~ Normal(0, disk_speed)
+        (should be fast)
+
+    disk_speed default 12 px/frame gives motion ≈ 1 DINOv2 patch (14 px) per
+    frame, above the patch-quantization threshold. The previous default of
+    3 px/frame yielded ~0.27 patch/frame, i.e. motion vanished inside the
+    patch grid before reaching Slot Attention.
     """
     bg_fn = BG_FNS[rng.integers(0, len(BG_FNS))]
     bg = bg_fn(size, rng)
@@ -102,7 +109,7 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int) -> list[np.nda
         r = int(rng.integers(8, 22))
         col = rng.random(3)
         disks_init.append([float(cx), float(cy), r, col])
-        vx, vy = rng.normal(0.0, 3.0, size=2)
+        vx, vy = rng.normal(0.0, disk_speed, size=2)
         velocities.append((float(vx), float(vy)))
 
     frames = []
@@ -118,9 +125,10 @@ def make_clip(size: int, rng: np.random.Generator, clip_len: int) -> list[np.nda
     return frames
 
 
-def make_frame(size: int, rng: np.random.Generator) -> np.ndarray:
+def make_frame(size: int, rng: np.random.Generator,
+               disk_speed: float = 12.0) -> np.ndarray:
     """Return a single scene (no temporal structure) — used only by --flat."""
-    return make_clip(size, rng, clip_len=1)[0]
+    return make_clip(size, rng, clip_len=1, disk_speed=disk_speed)[0]
 
 
 def main():
@@ -131,6 +139,10 @@ def main():
     ap.add_argument("--clip-len", type=int, default=4)
     ap.add_argument("--size", type=int, default=224)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--disk-speed", type=float, default=12.0,
+                    help="std of per-frame disk velocity in pixels. "
+                         "Default 12 ≈ 1 DINOv2 patch/frame; previous 3.0 "
+                         "was below patch quantization threshold.")
     ap.add_argument("--flat", action="store_true",
                     help="Legacy: dump all frames flat into --out (no temporal structure)")
     args = ap.parse_args()
@@ -142,7 +154,7 @@ def main():
     if args.flat:
         total = args.n_clips * args.clip_len
         for i in range(total):
-            frame = make_frame(args.size, rng)
+            frame = make_frame(args.size, rng, disk_speed=args.disk_speed)
             Image.fromarray((frame * 255).astype(np.uint8)).save(
                 out / f"frame_{i:06d}.png"
             )
@@ -154,7 +166,9 @@ def main():
         for c in range(args.n_clips):
             clip_dir = out / f"clip_{c:06d}"
             clip_dir.mkdir(exist_ok=True)
-            for t, frame in enumerate(make_clip(args.size, rng, args.clip_len)):
+            for t, frame in enumerate(
+                make_clip(args.size, rng, args.clip_len, disk_speed=args.disk_speed)
+            ):
                 Image.fromarray((frame * 255).astype(np.uint8)).save(
                     clip_dir / f"frame_{t:04d}.png"
                 )
@@ -162,7 +176,7 @@ def main():
                 print(f"  wrote {c + 1} / {args.n_clips} clips  "
                       f"({(c + 1) * args.clip_len} / {total} frames)")
         print(f"Done. {args.n_clips} clips × {args.clip_len} frames = {total} "
-              f"total in {out.resolve()}")
+              f"total (disk_speed={args.disk_speed}) in {out.resolve()}")
 
 
 if __name__ == "__main__":
