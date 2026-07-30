@@ -268,7 +268,10 @@ M2 未启动，未改动任何代码 / loss / 判据。
 
 ---
 
-## 附：可复用诊断脚本（scratchpad）
+## 附：可复用诊断脚本
+
+全部已整理进 `hippoact/tools/diagnostics/`，含 README（度量约定、参考数值、已知局限）。
+从 `hippoact/` 目录直接运行，无需设 PYTHONPATH。
 
 | 脚本 | 用途 |
 |---|---|
