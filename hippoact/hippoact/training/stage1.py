@@ -102,7 +102,7 @@ class Stage1Trainer:
         # CP5e). The proper next-step fix is an alpha-displacement target.
         # Until then, set lambda_slow=0 under carryover to avoid teaching the
         # router the wrong mapping.
-        if cfg.slot_init_mode == "carryover" and cfg.lambda_slow > 0:
+        if cfg.slot_init_mode in ("carryover", "carryover_norm") and cfg.lambda_slow > 0:
             print(
                 "[Stage1] WARNING: slot_init_mode=carryover with "
                 f"lambda_slow={cfg.lambda_slow} > 0. Content-diff target is "
@@ -169,14 +169,36 @@ class Stage1Trainer:
                 slots      = self.enc.slot_attn(
                     target_t, slots_init=slots_prev.detach()
                 )
+            elif mode == "carryover_norm":
+                # Moment-matched carryover (CP5g). Raw carryover feeds
+                # converged slots (norm ~1.3x the init distribution, mutually
+                # distant) as init, which preserves slot identity but removes
+                # the near-symmetric-init statistics that drive attention
+                # competition — the emergent engine behind localization.
+                # Fix: re-standardize each carried slot per-dim and map it
+                # back onto the learned init manifold N(mu, sigma), keeping
+                # its direction (identity) while restoring the statistics
+                # that make slots compete for patches again.
+                init = self.enc.slot_attn.sample_init(
+                    B, device=target_t.device, dtype=target_t.dtype
+                )
+                slots_prev = self.enc.slot_attn(target_prev, slots_init=init)
+                prev_d = slots_prev.detach()
+                z = (prev_d - prev_d.mean(-1, keepdim=True)) / (
+                    prev_d.std(-1, keepdim=True) + 1e-6
+                )
+                mu = self.enc.slot_attn.slots_mu          # (1, 1, D)
+                sigma = self.enc.slot_attn.slots_logsigma.exp()
+                carried_init = (mu + sigma * z).detach()
+                slots = self.enc.slot_attn(target_t, slots_init=carried_init)
             else:
                 raise ValueError(f"unknown slot_init_mode: {mode}")
 
-            # Under carryover, slot k in cur is constructed FROM slot k in
-            # prev (prev's output is cur's init). Index correspondence is
-            # already exact-by-construction, so cosine NN matching would
-            # only scramble ~42 % of the alignments (measured on CP5e). Skip.
-            if mode == "carryover":
+            # Under carryover(-norm), slot k in cur is constructed FROM slot
+            # k in prev (prev's output — possibly re-standardized — is cur's
+            # init). Index correspondence is exact-by-construction, so cosine
+            # NN matching would only scramble the alignments. Skip.
+            if mode in ("carryover", "carryover_norm"):
                 prev_for_slow = slots_prev.detach()
             else:
                 prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
