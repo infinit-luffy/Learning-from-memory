@@ -41,11 +41,18 @@ class Stage1Config:
     log_every: int = 50
     ckpt_every: int = 10_000
     viz_every: int = 5000
-    # Slow-temporal-loss variant. "soft_bce" (default) = MAD-standardized
+    # Slow-temporal-loss variant. "soft_bce" (default) = quantile min-max
     # sigmoid target BCE; "quantile_ce" = old quantile-thresholded CE (kept
-    # for A/B). "soft_bce" is decisively better once slot init is shared.
+    # for A/B).
     slow_variant: str = "soft_bce"
     slow_temperature: float = 1.0
+    # How to initialize slot queries across the paired forward passes.
+    #  "random"    — independent fresh sample per frame (baseline)
+    #  "shared"    — one fresh sample used for both frames (kills init noise
+    #                but also freezes spatial partition — CP5d finding)
+    #  "carryover" — fresh init for prev, prev's *output* as init for cur.
+    #                SAVi-style, restores cross-frame binding.
+    slot_init_mode: str = "shared"
     out_dir: str = "outputs/stage1"
     device: str = "cuda"
     use_wandb: bool = False
@@ -112,18 +119,41 @@ class Stage1Trainer:
             with torch.no_grad():
                 target_t    = self.enc.dino(imgs_t)
                 target_prev = self.enc.dino(imgs_prev)
-            # === Shared slot init across the pair ===
-            # Without this, ~87% of (slots_t - slots_prev)^2 is stochastic
-            # init noise from torch.randn draws, not content change. See
-            # SlotAttention.sample_init docstring.
             B = target_t.shape[0]
-            slots_init = self.enc.slot_attn.sample_init(
-                B, device=target_t.device, dtype=target_t.dtype
-            )
-            slots      = self.enc.slot_attn(target_t,    slots_init=slots_init)
-            slots_prev = self.enc.slot_attn(target_prev, slots_init=slots_init)
-            # Post-shared-init, NN matching handles any residual permutation
-            # drift from iterative refinement.
+
+            mode = self.cfg.slot_init_mode
+            if mode == "random":
+                # CP5c baseline (before shared-init fix): each frame gets an
+                # independent stochastic slot init. ~87 % of diff will be
+                # init noise; kept only for A/B.
+                slots_prev = self.enc.slot_attn(target_prev)
+                slots      = self.enc.slot_attn(target_t)
+            elif mode == "shared":
+                # CP5c fix: pair-wide shared init eliminates noise floor but
+                # freezes the spatial partition — slots do NOT track objects
+                # across frames (CP5d finding: alpha centroid moves 0.4 patch
+                # while objects move 2.3 patch).
+                init = self.enc.slot_attn.sample_init(
+                    B, device=target_t.device, dtype=target_t.dtype
+                )
+                slots_prev = self.enc.slot_attn(target_prev, slots_init=init)
+                slots      = self.enc.slot_attn(target_t,    slots_init=init)
+            elif mode == "carryover":
+                # SAVi-style: previous frame's OUTPUT slots become the init
+                # for the current frame's forward pass. Iterations then
+                # update slots to fit the new image starting from a state
+                # already fit to the previous image → cross-frame binding.
+                # Detach so gradients don't chain through two forward passes.
+                init = self.enc.slot_attn.sample_init(
+                    B, device=target_t.device, dtype=target_t.dtype
+                )
+                slots_prev = self.enc.slot_attn(target_prev, slots_init=init)
+                slots      = self.enc.slot_attn(
+                    target_t, slots_init=slots_prev.detach()
+                )
+            else:
+                raise ValueError(f"unknown slot_init_mode: {mode}")
+
             prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
             target = target_t
         else:

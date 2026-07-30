@@ -55,6 +55,11 @@ train:
   device: cuda
   seed: 0
   swap_prob: 0.3
+  # Slot init mode across the paired forward passes:
+  #   random    — CP5c baseline; ~87 % of diff is init noise
+  #   shared    — CP5c fix; noise floor 0 but no cross-frame binding
+  #   carryover — SAVi-style; prev output as cur init; restores binding
+  slot_init_mode: shared
 
 safety:
   quantile: 0.95

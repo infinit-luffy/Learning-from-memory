@@ -195,6 +195,7 @@ def main():
         viz_every=viz_every,
         slow_variant=str(cfg.loss.get("slow_variant", "soft_bce")),
         slow_temperature=float(cfg.loss.get("slow_temperature", 1.0)),
+        slot_init_mode=str(cfg.train.get("slot_init_mode", "shared")),
         out_dir=cfg.log.out_dir + "/stage1",
         device=cfg.train.device,
         use_wandb=args.wandb,
