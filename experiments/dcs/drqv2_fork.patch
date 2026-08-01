@@ -1,0 +1,88 @@
+diff --git a/cfgs/config.yaml b/cfgs/config.yaml
+index a5444c0..3016c4d 100644
+--- a/cfgs/config.yaml
++++ b/cfgs/config.yaml
+@@ -6,6 +6,10 @@ defaults:
+ # task settings
+ frame_stack: 3
+ action_repeat: 2
++# Distracting Control Suite background: none|easy|medium|hard.
++# Selected here rather than via a new task name so the per-task hyperparameters
++# in cfgs/task/*.yaml apply unchanged to both the clean and distracted arm.
++distraction: none
+ discount: 0.99
+ # train settings
+ num_seed_frames: 4000
+diff --git a/dmc.py b/dmc.py
+index 82abfb9..a2ac2c8 100644
+--- a/dmc.py
++++ b/dmc.py
+@@ -180,16 +180,27 @@ class ExtendedTimeStepWrapper(dm_env.Environment):
+         return getattr(self._env, name)
+ 
+ 
+-def make(name, frame_stack, action_repeat, seed):
++def make(name, frame_stack, action_repeat, seed, distraction='none'):
+     domain, task = name.split('_', 1)
+     # overwrite cup to ball_in_cup
+     domain = dict(cup='ball_in_cup').get(domain, domain)
+     # make sure reward is not visualized
+     if (domain, task) in suite.ALL_TASKS:
+-        env = suite.load(domain,
+-                         task,
+-                         task_kwargs={'random': seed},
+-                         visualize_reward=False)
++        if distraction != 'none':
++            # Distracting Control Suite; shares experiments/dcs/dcs_env.py with
++            # the TD-MPC2 arm so both baselines see identical backgrounds.
++            import os as _os, sys as _sys
++            _root = _os.path.abspath(_os.path.join(_os.path.dirname(__file__),
++                                                   _os.pardir, _os.pardir))
++            if _root not in _sys.path:
++                _sys.path.insert(0, _root)
++            from experiments.dcs.drqv2_dcs import load as _dcs_load
++            env = _dcs_load(name, seed, distraction)
++        else:
++            env = suite.load(domain,
++                             task,
++                             task_kwargs={'random': seed},
++                             visualize_reward=False)
+         pixels_key = 'pixels'
+     else:
+         name = f'{domain}_{task}_vision'
+diff --git a/replay_buffer.py b/replay_buffer.py
+index 5e199a9..6735a1d 100644
+--- a/replay_buffer.py
++++ b/replay_buffer.py
+@@ -165,7 +165,10 @@ class ReplayBuffer(IterableDataset):
+ 
+ 
+ def _worker_init_fn(worker_id):
+-    seed = np.random.get_state()[1][0] + worker_id
++    # int(): np.random.get_state()[1][0] is a np.uint32 on modern numpy, and
++    # Python 3.11's random.seed() rejects numpy integer types. Seeding
++    # semantics are unchanged.
++    seed = int(np.random.get_state()[1][0]) + worker_id
+     np.random.seed(seed)
+     random.seed(seed)
+ 
+diff --git a/train.py b/train.py
+index b53ffb4..f50cc5f 100755
+--- a/train.py
++++ b/train.py
+@@ -52,10 +52,13 @@ class Workspace:
+         # create logger
+         self.logger = Logger(self.work_dir, use_tb=self.cfg.use_tb)
+         # create envs
++        _distraction = self.cfg.get('distraction', 'none')
+         self.train_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
+-                                  self.cfg.action_repeat, self.cfg.seed)
++                                  self.cfg.action_repeat, self.cfg.seed,
++                                  _distraction)
+         self.eval_env = dmc.make(self.cfg.task_name, self.cfg.frame_stack,
+-                                 self.cfg.action_repeat, self.cfg.seed)
++                                 self.cfg.action_repeat, self.cfg.seed,
++                                 _distraction)
+         # create replay buffer
+         data_specs = (self.train_env.observation_spec(),
+                       self.train_env.action_spec(),

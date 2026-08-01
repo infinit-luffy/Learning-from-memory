@@ -1126,3 +1126,87 @@ TODO §Week 3-4 的主图设定隐含「pixel baseline 在 DCS 上明显吃亏�
 
 **未做**：W1.3（DrQ-v2 baseline）——需要第三张卡，本轮只授权 gpu0/gpu1。
 
+---
+
+# W1.2 后续三项（TODO 插队指令，2026-08-01 起）
+
+四卡排布（TODO §算力切换）。**gpu0 原定的 W2.1 E2E-0 阻塞**：
+需要 5080 上训好的 DCS Stage-1 checkpoint，本机全盘 `*.pt/*.ckpt` 搜索为空，
+迁移说明里的 scp 尚未发生。gpu0 改派给 retention 评测与 W1.3。
+
+迁移自检已过：`pytest tests/ -v` → **23 passed**（A5000 / torch 2.7.1+cu126 环境等价）。
+
+## R1 零样本 retention 评测（插队第 2 项，gpu0+gpu1）
+
+脚本 `experiments/scripts/retention_eval.py`：12 个 W1.2 checkpoint ×
+{none, easy, hard} × 30 episodes = 36 次纯评测，无训练。
+`none` 走 tdmpc2 原生路径，`easy/hard` 走 `experiments/dcs/dcs_env.py`
+（difficulty 决定取几个 DAVIS 视频：easy=4 / hard=全部）。
+
+一致性对照通过：`cheetah s1 on none = 475.0`，与 `final_eval.json` 的 475.0
+逐位一致（同 ckpt、同 30 episode、同 seed）——评测管线可复现。
+
+**早期数字（clean 训练的 checkpoint，零样本到干扰环境）**：
+
+| | eval none | eval easy | eval hard |
+|---|---|---|---|
+| cheetah-run s1 | 475.0 | 27.8 | — |
+| cheetah-run s2 | 431.4 | 19.9 | 21.5 |
+| cheetah-run s3 | 423.1 | 28.5 | — |
+
+`retention(hard/none)` ≈ **0.05**（s2）。clean 训练的 pixel 策略在视频背景下
+**几乎完全失效**。这与 W1.2.12 的发现并不矛盾而是互补：
+easy 上**训练**的策略最终能达到 clean 的 0.93/0.88（§W1.2.12），
+但 clean 上训练的策略**零样本迁到 easy/hard 会崩到 5%**。
+→ 论文 Q2 的两条轴（样本效率 + 零样本 retention）都有实测支撑。
+
+easy 训练的 checkpoint 才是协议行（train easy → eval {none, easy, hard}），
+跑完后补表。
+
+## R2 cheetah clean s1/s2 重跑（插队第 3 项，gpu2+gpu3）
+
+`exp_name=w12_pixel_rerun`，同 seed 同配置，原始结果保留在 `w12_pixel` 下对照。
+**预注册**：若末端退化（原 z = −3.6 / −4.2）复现 → 记为 TD-MPC2 末期方差，
+如实写入 §V；若不复现 → 说明是偶发，Table V 换用重跑值并记录两次结果。
+**无论哪种都不挪读数点。**
+
+## R3 W1.3 DrQ-v2 baseline（预注册）
+
+**矩阵**：{walker_walk, cheetah_run} × {none, easy} × 3 seeds = 12 runs，
+各 `num_train_frames=1_000_000`（= 500K agent steps，与 W1.2 预算逐点可比）。
+
+**集成**（`experiments/dcs/drqv2_dcs.py` + fork 4 文件 +29 −8）：
+干扰由**新增 config 字段 `distraction`** 选择，而非新任务名——这样
+`cfgs/task/*.yaml` 的 per-task 超参（`nstep` / `batch_size` /
+`stddev_schedule` / `num_train_frames`）在 clean 与 easy 两臂上**完全一致**，
+两臂唯一差别就是背景。原始 dm_env 由 **TD-MPC2 侧同一个 `dcs_env.make_dm_env`**
+构造，故两个 baseline 看到的背景分布完全相同。
+
+**smoke test 全过**（`experiments/scripts/smoke_drqv2.py`）：
+
+| 检查 | 结果 |
+|---|---|
+| `distraction=none` vs DrQ-v2 原生路径 | max\|Δreward\| = 0，max\|Δpixel\| = 0 |
+| easy 与 clean 的像素差异 | 50.9% |
+| 帧间变化量 easy / clean | 22.67 / 9.20（背景动态） |
+| easy vs clean 的 reward 序列 | Δ = 0（干扰不改任务） |
+| env-only 吞吐 | clean 432.6 / easy 97.4 step/s |
+
+**分辨率差异需在论文披露**：DrQ-v2 用 **84×84**，TD-MPC2 用 **64×64**，
+各自的已发表配置，不做统一（统一会让某一方偏离其最优设置）。
+
+**两个安装期坑（已记入 `experiments/README.md`）**：
+1. DrQ-v2 README 的 `task=walker_walk` 是 hydra 1.1 写法，
+   hydra 1.3 下必须写 `task@_global_=walker_walk`，否则直接报错退出。
+2. `replay_buffer._worker_init_fn` 把 `np.uint32` 传给 `random.seed()`，
+   Python 3.11 拒绝 numpy 整数类型 → 崩在 DataLoader worker 里。
+   已修为 `int(...)`，**播种语义不变**。这是上游与新 numpy/Python 的不兼容，
+   不是算法改动。
+
+**预期**（DrQ-v2 论文 medium 组 1M frames 处）：walker-walk ~900+、
+cheetah-run ~500 上下；easy 两格无先例，不设硬判据，理由同 §W1.2.1。
+
+**资源**：单 run ~43 FPS（= 21.5 agent step/s），1M frames ≈ 6.5 h 独占；
+6 并发预计 ~1.5 天。replay buffer 落**磁盘**（非内存），
+每 run ~21 GB × 12 = ~254 GB，/usr1 余 1.1 T，够。
+

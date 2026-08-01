@@ -1,0 +1,26 @@
+# W1.3 — DrQ-v2 baseline matrix (model-free 代表)，与 W1.2 同矩阵
+#   {walker_walk, cheetah_run} x {none, easy} x 3 seeds = 12 runs
+#
+# task 字段为 `<drqv2 task>__<distraction>`，队列会拆开成
+#   task=<drqv2 task> distraction=<distraction>
+# 这样 cfgs/task/*.yaml 的 per-task 超参（nstep / batch_size / stddev_schedule /
+# num_train_frames）在 clean 与 easy 两臂上完全一致 —— 只有背景不同。
+#
+# steps 一律用 **agent step**（与 W1.2 同单位）；队列换算成 DrQ-v2 的
+# num_train_frames = steps * action_repeat(2) = 1M frames，与 W1.2 预算对齐。
+#
+# seed-major 排序：早停也能留下每格一个 seed。
+#
+# task                     seed  steps   exp_name
+walker_walk__none            1  500000  w13_drqv2
+cheetah_run__none            1  500000  w13_drqv2
+walker_walk__easy            1  500000  w13_drqv2
+cheetah_run__easy            1  500000  w13_drqv2
+walker_walk__none            2  500000  w13_drqv2
+cheetah_run__none            2  500000  w13_drqv2
+walker_walk__easy            2  500000  w13_drqv2
+cheetah_run__easy            2  500000  w13_drqv2
+walker_walk__none            3  500000  w13_drqv2
+cheetah_run__none            3  500000  w13_drqv2
+walker_walk__easy            3  500000  w13_drqv2
+cheetah_run__easy            3  500000  w13_drqv2

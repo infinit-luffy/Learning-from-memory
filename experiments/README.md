@@ -9,8 +9,10 @@ W1.2 的 TD-MPC2-pixel baseline 矩阵在这里跑。设计文档见 `hippoact/P
 experiments/
 ├── setup_env.sh              # A5000 服务器的 conda 环境安装（版本选择理由写在脚本里）
 ├── dcs/
-│   ├── dcs_env.py            # DCS 环境构造（版本控制内的真实实现）
-│   ├── tdmpc2_fork.patch     # 对 third_party/tdmpc2 的全部改动：2 文件 +22 −1，算法零改动
+│   ├── dcs_env.py            # DCS 环境构造（版本控制内的真实实现，两个 baseline 共用）
+│   ├── drqv2_dcs.py          # DrQ-v2 侧接入，复用上面同一个 make_dm_env
+│   ├── tdmpc2_fork.patch     # 对 third_party/tdmpc2 的改动：2 文件 +22 −1，算法零改动
+│   ├── drqv2_fork.patch      # 对 third_party/drqv2 的改动：4 文件 +29 −8
 │   └── __init__.py
 ├── scripts/
 │   ├── smoke_env.py          # 集成正确性检查（跑长 run 前必过）
@@ -18,10 +20,13 @@ experiments/
 │   ├── train_dbg.py          # tdmpc2 train.py 的透明包装：SIGUSR1 → 栈转储
 │   ├── run_queue.py          # 多 GPU 作业队列（可重入：已完成的 run 会跳过）
 │   ├── sps.py                # 吞吐 / 进度 / ETA
+│   ├── smoke_drqv2.py        # DrQ-v2 侧的同款集成检查
 │   ├── final_eval.py         # final checkpoint × 30 episodes 重测（Table V 的读数）
+│   ├── retention_eval.py     # Q2 零样本：每个 ckpt × {none, easy, hard}
 │   ├── w12_report.py         # 结果表 + 与官方曲线对照 + 判据裁决
 │   ├── export_results.py     # 把结果从 logs/ 导出到 results/（入库的那份）
-│   └── w12_jobs.txt          # 作业清单
+│   ├── chain_w13.sh          # 等 retention 跑完自动接 W1.3
+│   └── w1{2,3}_*.txt         # 作业清单
 ├── results/                  # 48 KB，**入库**：曲线 / final_eval / summary / table_v
 └── logs/                     # ~500 MB 运行产物（.gitignore）
     ├── <task>/<seed>/<exp>/{eval.csv, models/final.pt}
@@ -71,7 +76,27 @@ kill -USR1 <pid>        # 栈会打进该 run 的 console log
    `egl_probe.py` 重测。
 5. **步数单位：`cfg.steps` 是 agent step，论文与官方 CSV 是 env step（2×）。**
    DMControl `action_repeat=2`。对照官方曲线时必须查 `2 × step`，
-   否则会凭空多出 1.8 倍的假差距。
+   否则会凭空多出 1.8 倍的假差距。DrQ-v2 侧的 `num_train_frames` 与
+   `eval.csv` 的 `frame` 列都是 env step，同一 csv 的 `step` 列才是 agent step。
+6. **DrQ-v2 README 的 `task=walker_walk` 是 hydra 1.1 写法。** hydra 1.3 下
+   必须写 `task@_global_=walker_walk`，否则启动即报错。
+7. **DrQ-v2 的 `replay_buffer._worker_init_fn` 与新 numpy/Python 不兼容**
+   （`np.uint32` 传给 `random.seed()`，Python 3.11 拒收），已在 fork 里
+   改成 `int(...)`，播种语义不变。
+
+## W1.3 DrQ-v2 起跑
+
+```bash
+$PY experiments/scripts/smoke_drqv2.py          # 先过集成检查
+nohup $PY experiments/scripts/run_queue.py \
+    --jobs experiments/scripts/w13_jobs.txt --runner drqv2 \
+    --gpus 0,1 --slots-per-gpu 3 > experiments/logs/queue_w13.log 2>&1 &
+```
+
+作业清单里 task 字段写作 `<drqv2 task>__<distraction>`，队列拆成
+`task@_global_=<task> distraction=<distraction>`；`steps` 一律用 agent step，
+队列自动 ×2 换算成 `num_train_frames`。**DrQ-v2 的 replay buffer 落磁盘**
+（~21 GB/run），不占内存。
 
 ## 环境
 

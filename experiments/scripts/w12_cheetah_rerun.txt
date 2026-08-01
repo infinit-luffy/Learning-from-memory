@@ -1,0 +1,8 @@
+# 重跑 W1.2 中末端退化的两个 cheetah clean run（TODO 插队指令 3）。
+# 同 seed、同配置，只有 exp_name 不同 —— 原始结果保留在 w12_pixel 下以便对照。
+# 目的：判断末端退化（z=-3.6 / -4.2）是否复现。
+# 复现 -> 记为 TD-MPC2 末期方差，如实报；不复现 -> 换值并记录。
+#
+# task         seed  steps   exp_name
+cheetah-run      1  500000  w12_pixel_rerun
+cheetah-run      2  500000  w12_pixel_rerun

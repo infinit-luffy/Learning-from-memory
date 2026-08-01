@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
 # PR_SET_PTRACER; needed because the server blocks py-spy from attaching to a
 # running job (ptrace_scope=1, no sudo). Identical argv, no algorithm change.
 TRAIN_PY = PROJECT_ROOT / "experiments" / "scripts" / "train_dbg.py"
+DRQV2_TRAIN_PY = PROJECT_ROOT / "third_party" / "drqv2" / "train.py"
 LAUNCH_DIR = PROJECT_ROOT / "experiments"          # -> logs land in experiments/logs/
 CONSOLE_DIR = LAUNCH_DIR / "logs" / "console"
 PYTHON = os.environ.get(
@@ -61,11 +62,20 @@ def parse_jobs(path):
 
 
 def work_dir(job):
+    if job.get("runner") == "drqv2":
+        # DrQ-v2 uses Path.cwd() as work_dir, which hydra sets to run.dir.
+        return (LAUNCH_DIR / "logs" / "drqv2"
+                / f"{job['task']}_{job['exp_name']}" / str(job["seed"]))
     return LAUNCH_DIR / "logs" / job["task"] / str(job["seed"]) / job["exp_name"]
 
 
 def last_eval_step(job):
-    """Highest step present in the run's eval.csv, or -1 if there is none."""
+    """Highest step present in the run's eval.csv, or -1 if there is none.
+
+    Both trainers write an `eval.csv`; `step` is agent steps in each. DrQ-v2
+    additionally writes `frame` (= step * action_repeat) — we compare on
+    `step` so job files stay in one unit across runners.
+    """
     csv_path = work_dir(job) / "eval.csv"
     if not csv_path.exists():
         return -1
@@ -78,6 +88,24 @@ def last_eval_step(job):
 
 
 def build_cmd(job, gpu):
+    if job.get("runner") == "drqv2":
+        # `steps` is agent steps for both runners; DrQ-v2 counts frames.
+        task, distraction = job["task"].rsplit("__", 1)
+        return [
+            PYTHON, str(DRQV2_TRAIN_PY),
+            # DrQ-v2 declares the task as `task@_global_`; hydra 1.3 rejects the
+            # bare `task=` form their README uses (which assumed hydra 1.1).
+            f"task@_global_={task}",
+            f"distraction={distraction}",
+            f"seed={job['seed']}",
+            f"num_train_frames={job['steps'] * 2}",   # action_repeat=2
+            "use_tb=false",
+            "save_video=false",
+            "save_train_video=false",
+            "save_snapshot=true",
+            "eval_every_frames=50000",                # = 25K agent steps, as tdmpc2
+            f"hydra.run.dir={work_dir(job)}",
+        ]
     hydra_dir = LAUNCH_DIR / "logs" / "hydra" / f"{job['task']}_s{job['seed']}_{job['exp_name']}"
     return [
         PYTHON, str(TRAIN_PY),
@@ -98,6 +126,8 @@ def build_cmd(job, gpu):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", required=True)
+    ap.add_argument("--runner", default="tdmpc2", choices=["tdmpc2", "drqv2"],
+                    help="drqv2 job task field is '<domain>_<task>__<distraction>'")
     ap.add_argument("--gpus", default="0,1")
     ap.add_argument("--slots-per-gpu", type=int, default=3)
     ap.add_argument("--poll", type=float, default=20.0)
@@ -108,6 +138,8 @@ def main():
 
     gpus = [int(g) for g in args.gpus.split(",")]
     jobs = parse_jobs(args.jobs)
+    for job in jobs:
+        job["runner"] = args.runner
     CONSOLE_DIR.mkdir(parents=True, exist_ok=True)
 
     pending, skipped = [], []
