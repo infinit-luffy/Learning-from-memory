@@ -1,0 +1,47 @@
+diff --git a/tdmpc2/envs/__init__.py b/tdmpc2/envs/__init__.py
+index 46f99a8..940572c 100644
+--- a/tdmpc2/envs/__init__.py
++++ b/tdmpc2/envs/__init__.py
+@@ -29,6 +29,10 @@ try:
+ 	from envs.mujoco import make_env as make_mujoco_env
+ except:
+ 	make_mujoco_env = missing_dependencies
++try:
++	from envs.dcs import make_env as make_dcs_env
++except:
++	make_dcs_env = missing_dependencies
+ 
+ 
+ warnings.filterwarnings('ignore', category=DeprecationWarning)
+@@ -65,7 +69,7 @@ def make_env(cfg):
+ 
+ 	else:
+ 		env = None
+-		for fn in [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env]:
++		for fn in [make_dm_control_env, make_maniskill_env, make_metaworld_env, make_myosuite_env, make_mujoco_env, make_dcs_env]:
+ 			try:
+ 				env = fn(cfg)
+ 			except ValueError:
+diff --git a/tdmpc2/envs/dcs.py b/tdmpc2/envs/dcs.py
+new file mode 100644
+index 0000000..748a4bc
+--- /dev/null
++++ b/tdmpc2/envs/dcs.py
+@@ -0,0 +1,17 @@
++"""Shim registering the Distracting Control Suite with TD-MPC2.
++
++The real code lives in the project tree (`experiments/dcs/dcs_env.py`) so that
++it is version-controlled; `third_party/tdmpc2` is an untracked pinned clone.
++This file plus one line in `envs/__init__.py` is the entire fork diff — see
++`experiments/dcs/tdmpc2_fork.patch`.
++"""
++import os
++import sys
++
++_PROJECT_ROOT = os.path.abspath(
++    os.path.join(os.path.dirname(__file__), os.pardir, os.pardir, os.pardir, os.pardir)
++)
++if _PROJECT_ROOT not in sys.path:
++    sys.path.insert(0, _PROJECT_ROOT)
++
++from experiments.dcs.dcs_env import make_env  # noqa: E402,F401

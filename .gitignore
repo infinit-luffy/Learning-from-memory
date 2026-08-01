@@ -1,0 +1,13 @@
+__pycache__/
+*.py[cod]
+
+# Pinned upstream clone, not a submodule (PHASE2_PLAN §1).
+# Reproduce with: git clone <url> && git checkout $(cat third_party/tdmpc2/PINNED)
+# then apply experiments/dcs/tdmpc2_fork.patch
+third_party/
+
+# Run artifacts: checkpoints (~42 MB each), hydra output, console logs.
+# The results themselves are exported to experiments/results/ (48 KB, tracked)
+# by experiments/scripts/export_results.py.
+experiments/logs/
+experiments/outputs/

@@ -1,0 +1,22 @@
+# W1.2 — TD-MPC2-pixel baseline matrix (Table V)
+#   {walker-walk, cheetah-run} x {clean, distracting-easy} x 3 seeds = 12 runs
+#
+# clean arm uses TD-MPC2's own dmcontrol path (`walker-walk` / `cheetah-run`),
+# i.e. literally the official pixel config, so the "对齐官方" check is exact.
+# easy arm goes through experiments/dcs/dcs_env.py (background distraction only).
+#
+# Ordered seed-major so an early stop still leaves one seed of every cell.
+#
+# task                  seed  steps   exp_name
+walker-walk               1  500000  w12_pixel
+cheetah-run               1  500000  w12_pixel
+dcs-easy-walker-walk      1  500000  w12_pixel
+dcs-easy-cheetah-run      1  500000  w12_pixel
+walker-walk               2  500000  w12_pixel
+cheetah-run               2  500000  w12_pixel
+dcs-easy-walker-walk      2  500000  w12_pixel
+dcs-easy-cheetah-run      2  500000  w12_pixel
+walker-walk               3  500000  w12_pixel
+cheetah-run               3  500000  w12_pixel
+dcs-easy-walker-walk      3  500000  w12_pixel
+dcs-easy-cheetah-run      3  500000  w12_pixel

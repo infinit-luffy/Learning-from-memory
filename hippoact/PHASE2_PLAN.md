@@ -39,7 +39,10 @@ unzip DAVIS-2017-trainval-480p.zip -d /var/tmp/hippoact_dcs/davis/
 #   /var/tmp/hippoact_dcs/davis/DAVIS/JPEGImages/480p
 ```
 
-坑预告（1-3 为 W1.1 实测新增，原预告的 EGL / 绝对路径 / numpy 均已证实）：
+**A5000 服务器（Phase-2 RL 用）的实际安装脚本见 `experiments/setup_env.sh`，
+版本与上面的 5080 配方不同，见坑 3 与坑 7。**
+
+坑预告（1-3 为 W1.1 实测新增，7-8 为 W1.2 实测新增；EGL / 绝对路径 / numpy 均已证实）：
 
 1. **`dm_control==1.0.14` 与任何 mujoco 版本都配不上。** 它需要
    `MjModel.bvh_geomid`；实测 mujoco 3.1.6 / 3.0.1 / 3.0.0 均无该字段。
@@ -49,10 +52,17 @@ unzip DAVIS-2017-trainval-480p.zip -d /var/tmp/hippoact_dcs/davis/
 3. **`distracting_control` 用 `model.tex_rgb` 写天空盒，该字段在新版 mujoco
    改名为 `tex_data`。** 实测天空纹理 `nchannel=3, adr=0`，布局与旧版一致，
    故为纯改名。用 `tools/dcs/patch_distracting_control.py`（幂等）。
+   **改名发生在 mujoco 3.2**：停在 **mujoco 3.1.2 + dm_control 1.0.16**
+   （tdmpc2 官方 docker pin）则该补丁不需要 —— W1.2 的 A5000 环境即如此，
+   easy 背景实测正常渲染。
 4. EGL 渲染：`export MUJOCO_GL=egl`（服务器无显示器必需）—— 已证实必需。
 5. DAVIS 路径要绝对路径，且要给到 `DAVIS/JPEGImages/480p` 这一层。
 6. `numpy<2.0`（distracting_control 间接依赖老 gym）；实测不影响
    torch 2.11+cu128 的 CUDA 可用性。
+7. **装 `distracting-control` 会把 numpy 顶到 2.x**（它依赖老 `gym`）。
+   必须在它之后再 `pip install numpy==1.24.4` 压回去。
+8. **`opencv-python-headless` 5.0.x 强制 numpy≥2**，与坑 7 互斥。
+   固定 `opencv-python-headless<4.12`（实测 4.11.0 与 numpy 1.24.4 共存）。
 
 **分割真值**：`env.physics.render(..., segmentation=True)` 返回 `(H,W,2)` 的
 `(geom_id, type)`。walker-walk 中 `geom 0=floor`、`1-7=walker 部件`、`-1=天空`，
@@ -110,25 +120,42 @@ class HippoActAdapter(nn.Module):
 
 ## 4. DCS wrapper 要点
 
+已实现：`experiments/dcs/dcs_env.py`（版本控制内）+ `third_party/tdmpc2/tdmpc2/envs/dcs.py`
+（17 行 shim）。任务名 `dcs-<difficulty>-<domain>-<task>`。
+
 ```python
-# experiments/dcs/make_env.py
-# - distracting_control suite, difficulty in {none, easy, hard}
-# - action_repeat=2 (TD-MPC2 官方 walker 配置)
-# - obs: {'rgb': 224x224 render, 'state': qpos+qvel}  ← 注意 224 不是官方 84
-# - 4-frame history buffer for binding window
+# - distracting_control suite, difficulty in {none, easy, medium, hard}
+#   difficulty=none 绕开 distracting_control 直接走 dm_control -> 与官方逐位相同
+# - distraction_types=("background",), dynamic=True   # 仅背景, 与 W1.1 一致
+# - action_repeat=2  # 硬编码在 tdmpc2 envs/dmcontrol.py 的 DMControlWrapper.step
+# - baseline obs: 3 帧 stack x 64x64  # 复用 tdmpc2 自己的 Pixels wrapper
 ```
 
-**分辨率决定**：TD-MPC2-pixel baseline 用官方 84×84（保持它的最优配置，
-公平）；HippoAct 用 224×224（DINOv2 要求）。这是 encoder 自带的输入规格差异，
-论文里如实披露，并在附录补一个 TD-MPC2-pixel@224 的对照（预期更慢更差，
-证明我们没有靠分辨率赢）。
+**分辨率决定（已按实测更正）**：TD-MPC2-pixel 官方 pixel 配置是 **3×64×64**，
+不是先前写的 84×84（见 `envs/dmcontrol.py` 的 `Pixels(num_frames=3, size=64)`）。
+baseline 保持官方 64×64（保持它的最优配置才叫公平）；HippoAct 用 224×224
+（DINOv2 要求）。这是 encoder 自带的输入规格差异，论文里如实披露，
+并在附录补一个 TD-MPC2-pixel@224 的对照（预期更慢更差，证明我们没有靠分辨率赢）。
+
+**单位约定（关键，曾踩坑）**：`cfg.steps` 与日志的 `step` 是 **agent step**；
+论文与仓库自带 `results/*.csv` 报的是 **env step = 2 × agent step**
+（论文 Table 6：DMControl episode length 1000 / action repeat 2 / effective length 500）。
+故 `steps=500000` 应在论文里写作 **1M environment steps**。
+**拿 agent step 直接对官方 CSV 会凭空多出 1.8 倍的假差距**——推导与撤回见
+`TODO_RESULT.md` §W1.2.0 / §W1.2.7。DrQ-v2 系论文同样报 env step。
 
 ## 5. 判据与里程碑（对照 TODO.md P2.1-P2.4）
 
-| 里程碑 | 判据 | 失败时 |
-|---|---|---|
-| P2.1 管线通 | pixel walker-walk 100K return ≥ 500 | 查渲染/action_repeat/reward scale |
-| P2.2 baseline 对齐 | clean 500K return 650-750 | 停，回 cowork 核对超参 |
+判据按 **agent step** 表述，阈值取对应 env step 处官方均值的 0.9×
+（该值落在官方最差 seed 附近）。推导见 `TODO_RESULT.md` §W1.2.0。
+
+| 里程碑 | 判据（agent step） | 官方对照（env step） | 失败时 |
+|---|---|---|---|
+| P2.1 管线通 | walker-walk clean 100K ≥ **700** | @200K env = 836.1（784/834/890） | 查渲染/action_repeat/reward scale |
+| P2.2 baseline 对齐 | walker-walk clean 500K ≥ **850** | @1M env = 939.6（929/942/949） | 停，回 cowork 核对超参 |
+| P2.2b | cheetah-run clean 500K ≥ **480** | @1M env = 537.3（453/570/590） | 同上 |
+
+原判据（100K ≥ 500 / 500K 650–750）在两种单位约定下都对不上官方数字，来源不明。
 | P2.3 Stage-1 on DCS | walker 身体有专属 slot + router 判视频背景为 slow | 停，带 slot 图回 cowork |
 | P2.4 端到端 | HippoAct ≥ 0.9× pixel (easy)；retention(hard/none) 显著更高 | 部分失败可接受，带全数字回 cowork 定叙事 |
 

@@ -1,0 +1,110 @@
+{
+  "cheetah-run|1|w12_pixel": {
+    "ckpt_mtime": 1785512654.0728295,
+    "episodes": 30,
+    "eval_seconds": 383.7,
+    "exp_name": "w12_pixel",
+    "reward": 475.0,
+    "seed": 1,
+    "task": "cheetah-run"
+  },
+  "cheetah-run|2|w12_pixel": {
+    "ckpt_mtime": 1785513318.981668,
+    "episodes": 30,
+    "eval_seconds": 390.1,
+    "exp_name": "w12_pixel",
+    "reward": 427.9,
+    "seed": 2,
+    "task": "cheetah-run"
+  },
+  "cheetah-run|3|w12_pixel": {
+    "ckpt_mtime": 1785546567.1739533,
+    "episodes": 30,
+    "eval_seconds": 449.7,
+    "exp_name": "w12_pixel",
+    "reward": 423.1,
+    "seed": 3,
+    "task": "cheetah-run"
+  },
+  "dcs-easy-cheetah-run|1|w12_pixel": {
+    "ckpt_mtime": 1785520450.379423,
+    "episodes": 30,
+    "eval_seconds": 362.1,
+    "exp_name": "w12_pixel",
+    "reward": 300.8,
+    "seed": 1,
+    "task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|2|w12_pixel": {
+    "ckpt_mtime": 1785551353.528896,
+    "episodes": 30,
+    "eval_seconds": 271.1,
+    "exp_name": "w12_pixel",
+    "reward": 470.0,
+    "seed": 2,
+    "task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|3|w12_pixel": {
+    "ckpt_mtime": 1785555526.2995107,
+    "episodes": 30,
+    "eval_seconds": 242.1,
+    "exp_name": "w12_pixel",
+    "reward": 398.4,
+    "seed": 3,
+    "task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-walker-walk|1|w12_pixel": {
+    "ckpt_mtime": 1785520890.7322712,
+    "episodes": 30,
+    "eval_seconds": 399.1,
+    "exp_name": "w12_pixel",
+    "reward": 753.8,
+    "seed": 1,
+    "task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|2|w12_pixel": {
+    "ckpt_mtime": 1785551262.6920092,
+    "episodes": 30,
+    "eval_seconds": 263.6,
+    "exp_name": "w12_pixel",
+    "reward": 924.8,
+    "seed": 2,
+    "task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|3|w12_pixel": {
+    "ckpt_mtime": 1785555722.447254,
+    "episodes": 30,
+    "eval_seconds": 244.8,
+    "exp_name": "w12_pixel",
+    "reward": 882.4,
+    "seed": 3,
+    "task": "dcs-easy-walker-walk"
+  },
+  "walker-walk|1|w12_pixel": {
+    "ckpt_mtime": 1785512841.8270445,
+    "episodes": 30,
+    "eval_seconds": 437.4,
+    "exp_name": "w12_pixel",
+    "reward": 846.9,
+    "seed": 1,
+    "task": "walker-walk"
+  },
+  "walker-walk|2|w12_pixel": {
+    "ckpt_mtime": 1785514394.9895484,
+    "episodes": 30,
+    "eval_seconds": 465.7,
+    "exp_name": "w12_pixel",
+    "reward": 935.6,
+    "seed": 2,
+    "task": "walker-walk"
+  },
+  "walker-walk|3|w12_pixel": {
+    "ckpt_mtime": 1785542450.927933,
+    "episodes": 30,
+    "eval_seconds": 243.7,
+    "exp_name": "w12_pixel",
+    "reward": 963.4,
+    "seed": 3,
+    "task": "walker-walk"
+  }
+}
