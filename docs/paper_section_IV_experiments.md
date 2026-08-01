@@ -46,7 +46,7 @@ TD-MPC2 with a pixel encoder is our primary direct comparison, since HippoAct re
 
 **Compute.** All experiments run on 4 × NVIDIA A5000 (24 GB each). Table III reports wall-clock training time per method per task; the total experimental budget consumed 1,920 GPU-hours.
 
-**Reproducibility.** Code, DINOv2 checkpoints, real-robot trajectories, and training logs are released at `https://[anonymized]`. Random seeds {0,1,2,3,4} unless noted.
+**Reproducibility.** Code, DINOv2 checkpoints, and training logs are released at `https://[anonymized]`. Random seeds {0,1,2,3,4} unless noted. Our TD-MPC2-pixel reproduction tracks the official learning curves within 0.98–1.08× at 100 K/250 K/375 K agent steps on both walker-walk and cheetah-run (3 seeds each); the full fork diff against upstream TD-MPC2 is 2 files, +22/−1 lines, with zero algorithmic changes. We additionally disclose an unresolved end-of-training degradation affecting 4 of 12 baseline runs (final-checkpoint score below the 400–475 K plateau; z ≤ −3.6), which we report as measured rather than selecting earlier checkpoints.
 
 ---
 
@@ -79,9 +79,11 @@ TD-MPC2 with a pixel encoder is our primary direct comparison, since HippoAct re
 
 ## IV.C  Q2 — Background Robustness (Fig. 4, Table V)
 
-*Hypothesis.* Zero-shot deployment under background distraction unseen at training time incurs less performance drop for HippoAct than for pixel encoders.
+*Hypothesis.* Background distraction taxes pixel encoders on two axes that our decomposition should relieve: (i) *sample efficiency* under in-distribution distraction, and (ii) *zero-shot retention* under out-of-distribution distraction.
 
-**Protocol.** Train all methods on DMC-Distracting Easy (mild video backgrounds). Evaluate zero-shot on {None, Easy, Hard} without any additional training. Hard split uses full DAVIS-2017 video backgrounds. Report absolute return and *retention rate* (return<sub>hard</sub> / return<sub>none</sub>).
+**Protocol.** Train all methods on DMC-Distracting Easy (mild video backgrounds). Report (a) learning curves with early-training ratios at 50 K/100 K/200 K agent steps, and (b) zero-shot evaluation on {None, Easy, Hard} without additional training, with *retention rate* = return<sub>hard</sub> / return<sub>none</sub>. Hard uses full DAVIS-2017 video backgrounds.
+
+The two-axis design is motivated by a baseline measurement: given enough interactions, TD-MPC2-pixel largely *solves* easy distraction — its easy/clean final-performance ratio reaches 0.93 (walker) / 0.88 (cheetah) — but pays heavily early in training (ratio 0.31–0.39 at 50 K steps). In-distribution final score is therefore a near-saturated axis; the discriminative comparisons are early-sample efficiency and out-of-distribution retention.
 
 **Table V — Background Robustness (return at eval time, 5 seeds, no adaptation).**
 

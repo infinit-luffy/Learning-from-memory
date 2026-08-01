@@ -57,6 +57,20 @@ walker-walk + cheetah-run，clean + distracting-easy，500K steps × 3 seeds
 
 ---
 
+## ⚡ 插队指令（W1.2 之后，2026-08-01）
+
+优先级重排（W1.2.12 的发现 + 零成本 retention 机会）：
+
+1. **[5080] W2.1 E2E-0 试跑**，判据改为**多点位**：50K/100K/250K/500K 各
+   ≥ 0.8× pixel 同点位。早期点位比 final 重要——W1.2.12 表明样本效率
+   是主战场。
+2. **[A5000×2] 零样本 retention 评测（新，插队）**：现有 12 个 pixel
+   checkpoint 对 {none, hard} 直接 eval（无训练，几小时）。
+   → Table V pixel 行的 retention 立即出数，Q2 基线提前两周到位。
+3. **[A5000×2, 之后] 重跑 cheetah clean s1/s2**（~9h）：末端退化复现性。
+   复现 → 记为 TD-MPC2 末期方差如实报；不复现 → 换值并记录。
+4. **[第三张卡若授权] W1.3 DrQ-v2**：次要 baseline，可等。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
