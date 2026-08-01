@@ -57,19 +57,26 @@ walker-walk + cheetah-run，clean + distracting-easy，500K steps × 3 seeds
 
 ---
 
-## ⚡ 插队指令（W1.2 之后，2026-08-01）
+## ⚡ 算力切换 + 插队指令（2026-08-01 更新：全量 4×A5000，5080 退役）
 
-优先级重排（W1.2.12 的发现 + 零成本 retention 机会）：
+### 迁移注意（一次性）
+- A5000 是 sm_86：**重建 venv**，torch 用常规 cu121/cu124 wheel 即可
+  （5080 上被迫用的 torch 2.11+cu128 不必带过去；但 dm_control 最新版 +
+  mujoco 3.11 + distracting_control 补丁三件套照搬 PHASE2_PLAN §2）
+- **Stage-1 checkpoint 直接迁移**：torch ckpt 跨架构兼容，W1.1 训好的
+  DCS Stage-1 ckpt scp 过去即可，不用重训
+- 迁移后先跑 `pytest tests/ -v` + `scripts/overfit_test.py` 确认环境等价
 
-1. **[5080] W2.1 E2E-0 试跑**，判据改为**多点位**：50K/100K/250K/500K 各
-   ≥ 0.8× pixel 同点位。早期点位比 final 重要——W1.2.12 表明样本效率
-   是主战场。
-2. **[A5000×2] 零样本 retention 评测（新，插队）**：现有 12 个 pixel
-   checkpoint 对 {none, hard} 直接 eval（无训练，几小时）。
-   → Table V pixel 行的 retention 立即出数，Q2 基线提前两周到位。
-3. **[A5000×2, 之后] 重跑 cheetah clean s1/s2**（~9h）：末端退化复现性。
-   复现 → 记为 TD-MPC2 末期方差如实报；不复现 → 换值并记录。
-4. **[第三张卡若授权] W1.3 DrQ-v2**：次要 baseline，可等。
+### 4 卡排布
+
+| 卡 | 任务 | 时长 |
+|---|---|---|
+| gpu0 | **W2.1 E2E-0** walker easy ×1 seed（多点位判据：50K/100K/250K/500K 各 ≥0.8× pixel 同点位） | ~2 天 |
+| gpu1 | **零样本 retention 评测**：12 个 pixel ckpt 对 {none, hard} 纯 eval → 完成后接 cheetah clean s1 重跑 | 数小时 + 9h |
+| gpu2 | cheetah clean s2 重跑 → 完成后接 **W1.3 DrQ-v2** 矩阵起步 | 9h + 后续 |
+| gpu3 | **W1.3 DrQ-v2** walker/cheetah × clean/easy × 3 seed 起步 | ~4 天 |
+
+E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
 
 ## Week 2 — 最小端到端
 
