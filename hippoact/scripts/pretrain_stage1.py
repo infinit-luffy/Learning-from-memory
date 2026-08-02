@@ -16,8 +16,10 @@ Aim for ~50-100K diverse frames for Stage 1.
 from __future__ import annotations
 
 import argparse
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
@@ -148,11 +150,26 @@ def main():
                     help="Force legacy flat loader even if clip layout detected")
     ap.add_argument("--pair-gap", type=int, default=1,
                     help="For clip loader: frame gap between (prev, cur)")
+    ap.add_argument("--seed", type=int, default=None,
+                    help="Override train.seed; use for Stage-1 variance sweeps")
     ap.add_argument("--viz-every", type=int, default=None,
                     help="Override log.viz_every from config")
     args = ap.parse_args()
 
     cfg = load_config(args.config)
+
+    # Stage-1 was previously unseeded: `train.seed` sat in every config but was
+    # never read, so each run was an independent draw and no run could be
+    # reproduced. Seed before building the encoder — slot query init, the
+    # decoder, and the router are all sampled at construction time.
+    # `--seed` overrides the config so a variance sweep needs no config edits.
+    seed = args.seed if args.seed is not None else int(cfg.train.get("seed", 0))
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    print(f"[Stage1] seed = {seed}")
+
     encoder = build_encoder(cfg)
 
     root = Path(args.data_dir)
