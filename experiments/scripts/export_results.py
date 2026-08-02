@@ -47,17 +47,23 @@ def at(curve, step):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--exp", default="w12_pixel")
+    ap.add_argument("--also", default="w12_pixel_rerun",
+                    help="extra exp_names whose curves to export (suffixed), "
+                         "comma separated; they do not enter summary.csv")
     args = ap.parse_args()
 
     curves_dir = OUT / "curves"
     curves_dir.mkdir(parents=True, exist_ok=True)
 
     runs = []
-    for path in sorted(LOG_ROOT.glob(f"*/*/{args.exp}/eval.csv")):
-        seed = int(path.parent.parent.name)
-        task = path.parent.parent.parent.name
-        shutil.copyfile(path, curves_dir / f"{task}_s{seed}.csv")
-        runs.append((task, seed, read_curve(path)))
+    for exp in [args.exp] + args.also.split(",") if args.also else [args.exp]:
+        for path in sorted(LOG_ROOT.glob(f"*/*/{exp}/eval.csv")):
+            seed = int(path.parent.parent.name)
+            task = path.parent.parent.parent.name
+            suffix = "" if exp == args.exp else f"_{exp.split('_')[-1]}"
+            shutil.copyfile(path, curves_dir / f"{task}_s{seed}{suffix}.csv")
+            if exp == args.exp:
+                runs.append((task, seed, read_curve(path)))
     if not runs:
         print("no eval.csv found under", LOG_ROOT)
         return 1
@@ -66,6 +72,23 @@ def main():
     final = json.loads(src_json.read_text()) if src_json.exists() else {}
     if final:
         (OUT / "final_eval.json").write_text(json.dumps(final, indent=2, sort_keys=True))
+
+    # Q2 zero-shot grid (R1). Small and central to the paper's §IV.C, so it
+    # travels with the curves rather than staying in the run artifacts.
+    ret_json = LOG_ROOT / "retention_eval.json"
+    if ret_json.exists():
+        shutil.copyfile(ret_json, OUT / "retention_eval.json")
+        proc = subprocess.run(
+            [sys.executable, str(ROOT / "experiments" / "scripts" / "retention_eval.py"),
+             "--report"],
+            cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        (OUT / "retention.md").write_text(
+            "# R1 — zero-shot retention grid\n\n"
+            "See `hippoact/TODO_RESULT.md` §R1: the paper's `hard/none` ratio is\n"
+            "misleading here because easy-trained policies score *worse* on clean\n"
+            "backgrounds than on their training distribution, so the denominator is\n"
+            "itself out-of-distribution. `hard/easy` is the meaningful ratio.\n\n"
+            "```\n" + proc.stdout + "```\n")
 
     # flat summary, one row per run
     with open(OUT / "summary.csv", "w", newline="") as f:

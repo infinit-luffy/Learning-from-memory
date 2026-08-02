@@ -1210,3 +1210,262 @@ cheetah-run ~500 上下；easy 两格无先例，不设硬判据，理由同 §W
 6 并发预计 ~1.5 天。replay buffer 落**磁盘**（非内存），
 每 run ~21 GB × 12 = ~254 GB，/usr1 余 1.1 T，够。
 
+---
+
+# R1 结果 — 零样本 retention（12 个 W1.2 checkpoint × {none, easy, hard} × 30 ep）
+
+脚本 `experiments/scripts/retention_eval.py`，缓存 `experiments/logs/retention_eval.json`。
+36/36 全部完成。一致性对照通过：`cheetah s1 on none = 475.0` 与 `final_eval.json`
+逐位一致。
+
+| 训练于 | eval none | eval easy | eval hard | hard/none |
+|---|---|---|---|---|
+| **dcs-easy-walker-walk** | 556.6 ± 65.9 | **853.7 ± 89.0** | 633.0 ± 85.6 | **1.137** |
+| walker-walk (clean) | **916.0 ± 59.6** | 75.8 ± 7.4 | 97.1 ± 10.9 | **0.106** |
+| **dcs-easy-cheetah-run** | 118.6 ± 13.6 | **389.7 ± 84.9** | 191.8 ± 47.4 | **1.618** |
+| cheetah-run (clean) | **443.2 ± 27.9** | 25.4 ± 4.8 | 28.6 ± 6.2 | **0.064** |
+
+（粗体 = 该行的训练分布）
+
+## R1.1 论文 §IV.C 的 retention 定义在这组数据上失效
+
+`retention = R_hard / R_none` 对 **easy 训练**的两行给出 **1.137 / 1.618**——
+大于 1，作为"鲁棒性"指标毫无意义。原因不是 hard 上表现好，而是**分母塌了**：
+
+```
+dcs-easy-walker-walk :  none 556.6  <  easy 853.7    (差 297)
+dcs-easy-cheetah-run :  none 118.6  <  easy 389.7    (差 271)
+```
+
+**easy 上训练出来的策略，回到干净背景反而更差。** 它把"画面里有视频背景"
+一并学进了状态表征，去掉背景同样是分布外。所以 `none` 不是一个中性参照，
+不能当分母。
+
+### 建议改用 `R_hard / R_easy`（相对训练分布）
+
+| | R_hard / R_easy |
+|---|---|
+| dcs-easy-walker-walk | **0.741** |
+| dcs-easy-cheetah-run | **0.492** |
+
+这两个数才有"从训练分布走到更强干扰、保住多少"的含义，
+且分母是策略自己的训练条件、不含额外分布偏移。
+
+**这是需要 cowork 拍板的指标定义变更**（§IV.C 现文写的是 hard/none）。
+在改定之前，两种口径的数都留在上表里，不做取舍。
+
+## R1.2 真正的大差距在"训练时见没见过干扰"
+
+```
+walker :  clean 训练 → hard 97.1     easy 训练 → hard 633.0     6.5×
+cheetah:  clean 训练 → hard 28.6     easy 训练 → hard 191.8     6.7×
+```
+
+clean 训练的策略零样本迁到干扰环境 **retention 0.064–0.106**，几乎完全失效
+（walker 916 → 97，cheetah 443 → 29）。
+
+这与 §W1.2.12 互补而非矛盾：
+- **训练时见过干扰**：最终分数只差 7–12%（§W1.2.12），代价几乎全在样本效率
+- **训练时没见过**：零样本崩到 6–11%
+
+→ Q2 的两条轴（样本效率 + 零样本泛化）都拿到了 baseline 实测值，
+且两条轴上 pixel baseline 都有明确弱点可打。
+
+---
+
+# R2 结果 — cheetah clean s1/s2 重跑：末端退化是**随机的**，不是该 seed 的固有性质
+
+同 seed、同配置、`exp_name=w12_pixel_rerun`，原始结果保留在 `w12_pixel` 下对照。
+
+| run | 400–475K 四点 | 500K | z | 平台 | final ckpt ×30ep |
+|---|---|---|---|---|---|
+| 原始 s1 | 568 537 591 507 | 418 | **−3.6** | 551 | 475.0 |
+| **重跑 s1** | 518 520 450 527 | **260** | **−6.8** | 504 | **260.9** |
+| 原始 s2 | 479 469 477 453 | 419 | **−4.2** | 470 | 427.9 |
+| **重跑 s2** | 639 640 660 650 | **648** | **+0.1** | **647** | **638.3** |
+
+## R2.1 预注册的两个分支都不成立，结果是混合的
+
+预注册写的是「复现 → 记为末期方差；不复现 → 换用重跑值」。实际：
+**s1 复现了（且更狠，z −6.8），s2 完全没复现。** 所以退化不是"某个 seed 会掉"，
+而是**每次 run 独立地以某概率发生**：5 个 cheetah clean run 里 3 个掉、2 个没掉。
+
+## R2.2 更要紧的发现：固定 seed 也不可复现，方差极大
+
+**同一个 seed 2**，同配置、同代码，两次运行的平台是 **470 vs 647**（差 38%）。
+
+TD-MPC2 设了 `torch/numpy` 种子，但 `cudnn.benchmark=True`、GPU 原子操作、
+以及 CPU replay buffer 的采样时序都不确定，故 run 之间只能视为**独立抽样**，
+不能视为"同一次实验的复现"。
+
+含义：
+1. **cheetah clean 的 3-seed 均值不足以支撑 ±30 以内的结论。** 5 个 run 的
+   final-ckpt 值：475.0 / 427.9 / 423.1 / 260.9 / 638.3 —— 极差 377。
+2. 官方 CSV 的 3 seed 跨度（453 / 570 / 590，sd 74）与我们同量级，
+   **不是我们的管线更不稳**。
+3. P2.2b 判据（≥480，取自官方均值 537.3 的 0.9×）在这种方差下**本身就是
+   一条噪声线**：官方自己的最差 seed 453 也过不了它。
+
+## R2.3 P2.2b 怎么写 —— 留给 cowork 定，我不单方面改
+
+三种口径的数都摆在这里，**不做取舍**：
+
+| 口径 | cheetah clean final ckpt | vs 判据 480 |
+|---|---|---|
+| 预注册的原始 3 seeds | 442.0 ± 28.7 | FAIL |
+| 5 个 run 全量（含重跑） | 445.0 ± 138.5 | FAIL |
+| 若只换掉两个重跑过的 seed | (260.9 + 638.3 + 423.1)/3 = 440.8 | FAIL |
+
+三种都不过，**结论不因口径而变**。但注意第二行的 sd = 138.5：
+真实不确定度远大于原先 3-seed 报出的 28.7。
+
+**我的判断（供参考，非方法决策）**：判据 480 是从官方单点均值推出的 0.9×，
+而官方那三个 seed 自己的 sd 就是 74；用一条 ±0 的线去卡一个 sd≈140 的量，
+统计上没有意义。更该做的是把 cheetah clean 的 seed 数加到 5–8，
+用置信区间而非单点阈值来判断"是否复现官方"。这需要 cowork 拍板。
+
+---
+
+# R4 Stage-1 重训（A5000）— 判据通过，但比 W1.1 弱一档，且加训救不回来
+
+W1.1 的 checkpoint 留在已退役的 5080 上未迁移，按用户指示重训。
+
+**数据复现无误**：采集参数复原后得到 `48000 (prev,cur) pairs`，
+与 W1.1 记录的「clean+easy 合训（48000 对）」逐位一致。
+配方见新增的 `hippoact/configs/stage1_dcs.yaml`，与 `default.yaml` 只差三处，
+全部来自 CP6 定型（`alpha_connectivity` / `slot_iters 3` + `slot_dim 128` /
+`slot_init_mode shared`）。训练 30000 步，实测 **1.11 steps/s**，耗时 7.4 h。
+
+## R4.1 判据：通过，但明显弱于 W1.1
+
+| | W1.1 | 重训 (ckpt_final) |
+|---|---|---|
+| clean 富集 / Cohen's d / AUC | 4.15 / +2.262 / 0.943 | **3.51 / +1.463 / 0.724** |
+| easy 富集 / Cohen's d / AUC | 4.26 / +1.844 / 0.833 | **3.26 / +1.196 / 0.651** |
+
+判据线 ≥3.0，**两侧都过**。
+
+**对照全部正确**：oracle 9.54、uniform **精确 = 1.00**、walker 占画面 0.0706 ——
+三项与 W1.1 逐位一致，故**不是度量出问题，是这个 encoder 确实弱一档**。
+（uniform 必须精确等于解析值这条规则，在 W1.1.6 救过一次，这里再次用于
+排除"尺子坏了"。）
+
+## R4.2 加训不是解药 —— 判据随步数的走势已测
+
+用中间 checkpoint 逐个测判据（每个 ~3 min）：
+
+| step | clean 富集 | clean d | easy 富集 | easy d |
+|---|---|---|---|---|
+| 5000 | 2.89 | **+1.773** | 2.49 | +1.008 |
+| 10000 | 3.68 | +1.585 | **3.75** | **+1.436** |
+| 15000 | 3.13 | +1.325 | 3.62 | +1.350 |
+| 20000 | 3.44 | +1.447 | 3.67 | +1.362 |
+| 25000 | 3.50 | +1.433 | 3.65 | +1.299 |
+| 30000 | **3.51** | +1.463 | 3.26 | +1.196 |
+
+**10000 步即到平台**，此后富集度不再上升；Cohen's d 甚至在 5000 步最高后回落。
+→ 「再多训几万步就能追上 W1.1」这条路**已被实测否决**，差距另有原因。
+
+## R4.3 差距原因未知 —— 不编
+
+已排除：度量（对照全对）、训练步数（R4.2）。
+无法排除：W1.1 未记录的超参（`num_slots`、`slot_query_mode`、实际步数、
+数据采集时的 `distraction_seed`）、单 seed 方差。
+**W1.1 的完整配置没有留档，我只能保证 CP6 明确定型的那三项一致。**
+
+顺带一处同形现象：easy 在 30000 步（3.26）低于 10000–25000 的平台（3.62–3.75），
+与 §W1.2.11 的「末端略退」同形，但此处只有一条曲线，不作结论。
+
+## R4.4 对 W2.1 E2E-0 的影响（需要 cowork 决定）
+
+判据（TODO 给 E2E-0 设的门）**通过**，可以起 E2E-0。但必须记住：
+**这个 encoder 比论文所述的 W1.1 弱一档**。若 E2E-0 不过 0.8× 判据，
+**将无法区分是 adapter 的问题还是 encoder 弱一档的问题**——
+这个歧义在起跑前就存在，事后无法消除。
+
+两条路：
+1. 用 `ckpt_final.pt` 直接起 E2E-0（不按判据挑 checkpoint，与 Table V 口径一致），
+   把 3.51/3.26 vs 4.15/4.26 的差距写进 E2E-0 的每一个结论
+2. 先查差距（但目前没有可查的假设，见 R4.3）
+
+## R4.5 E2E-0 的集成尚未完成
+
+adapter 代码在（`hippoact/adapters/tdmpc2_adapter.py`，commit ead6d30），但：
+- **tdmpc2 侧的 `cfg.encoder_type` 分发还没接**（当前 fork 只改了环境注册）
+- adapter 要的观测是 `{rgb: 224×224 ImageNet-normalized, state: qpos/qvel}`，
+  而现有 DCS wrapper 只产出 64×64 纯 rgb（TD-MPC2 官方 pixel 规格）
+- 需要一个 smoke test 断言 **MPPI 每个 env step 只调用一次 encoder**
+  （PHASE2_PLAN §6 风险项：planning 在 latent 空间 rollout，
+  若 adapter 被 MPPI 重复调用，开销会放大 512×）
+
+这三项完成前 E2E-0 起不来。
+
+---
+
+# R3 W1.3 DrQ-v2 — 进行中（4/12 完成，8 个在跑）
+
+12 runs = {walker_walk, cheetah_run} × {none, easy} × 3 seeds，
+各 `num_train_frames=1_000_000`（= 500K agent steps，与 W1.2 逐点可比）。
+gpu1/2/3 各 3 槽。实测 FPS：**none ≈ 48–54，easy ≈ 28–39**（3 并发/卡）。
+预计 2026-08-02 20:00 前后全部完成。
+
+## R3.1 一个必须记下的可比性细节
+
+DrQ-v2 的训练循环在 `global_step == 500000` 时先退出、后 eval，
+**故其最后一次 eval 落在 475K agent step，不是 500K**（队列日志里
+`last_eval_step=475000` 即此）。与 W1.2 的 500K 点对比时要么取 475K 对 475K，
+要么用 final checkpoint 重测口径（后者更干净，与 §W1.2.9 一致）。
+
+---
+
+# R5 本轮的四次事故（全部为我的操作失误，已修，记录以免重犯）
+
+## R5.1 装 matplotlib 把 numpy 顶到 2.4.6，炸掉整个环境
+
+Stage-1 的 slot 可视化需要 matplotlib，`pip install matplotlib` 连带升级了 numpy。
+后果：**W1.3 的 12 个 job 全部在 `replay_buffer.add` 的断言上崩掉**，
+根因是 dm_control 索引层依赖 numpy 1.x 的 `np.array(copy=False)` 语义
+（numpy 2 改为报 `ValueError: Unable to avoid copy`）。
+
+**这个坑在 W1.2 装环境时踩过一次**（distracting-control 经由老 gym 顶 numpy），
+当时只在文档里记了一句，没固化成规程，于是又踩一次。
+现已把 numpy pin **移到 `setup_env.sh` 的最后**并加断言：
+
+```bash
+$PY -m pip install "numpy==1.24.4" "opencv-python-headless<4.12" "protobuf==5.29.6"
+$PY -c "import numpy; assert numpy.__version__.startswith('1.24')"
+```
+
+## R5.2 两个队列跑同一份 job 表 → 同一个 run 被写两次
+
+启动 `chain_w13.sh` 时命令末尾的 `head` 报错让整条命令返回 1，
+我误以为没起、又启动一次。结果两个队列各开 3 槽，
+`walker_walk easy seed=1` 被**两个进程写同一个 work_dir**。
+已杀掉并删除 6.5 GB 污染数据（只跑了几分钟）。
+
+**改文件没用**——队列启动时就把 job 列表读进内存了。
+故在 `run_queue.py` 里加了**磁盘抢占锁**：启动前在 `<work_dir>/.claim` 写 pid，
+其他队列见到活着的 pid 就 SKIP，持有者死亡则视为过期可接管。
+两个队列现在可以安全共用同一份 job 表。
+
+## R5.3 链式脚本等错进程名 → 差点在残缺数据上开训
+
+`chain_stage1.sh` 里写的是 `pgrep -f 'collect_stage1\.sh'`，
+实际脚本名是 `collect_stage1_data.sh`，没匹配上，等待循环立即通过。
+**被 clip 数量守卫接住**（`train_easy: 0 clips` → FATAL 退出）。
+守卫已从"非空"收紧为"必须精确等于 1000/1000/100/100"。
+
+## R5.4 判据脚本没先单独跑过 → gpu0 空转 3 小时
+
+Stage-1 09:42 训完（rc=0），紧接着的判据检查立刻崩在
+`from validate_semantics import build_encoder`——该文件在 `tools/diagnostics/`
+而非 `tools/dcs/`，链子里没设对 `PYTHONPATH`。
+训练产物完好，但 **gpu0 从 09:42 空到 12:35**。
+
+同类问题在同一天出现过两次（另一次是 `python scripts/pretrain_stage1.py` 报
+`No module named 'hippoact'`——我之前用 `python -c` / `python -m pytest`
+验证"环境没问题"，那两种启动方式都会把 cwd 加进 sys.path，把问题兜住了）。
+
+**教训**：链式脚本里每一个下游步骤，都要先用**真实调用方式**单独跑通一次
+再挂进链子。用交互式 `python -c` 验证不算数。
+

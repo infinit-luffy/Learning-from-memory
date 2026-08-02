@@ -35,6 +35,19 @@ $PY -m pip install \
 # DCS：distracting_control 依赖 cv2 但未声明（PHASE2_PLAN 坑 2）
 $PY -m pip install distracting-control opencv-python-headless
 
+# W1.3 (DrQ-v2) 与 Stage-1 额外需要的包。
+# tensorboard 必须 <=2.19：2.21 要求 protobuf>=6.31，与 wandb 0.17.4 的
+# protobuf<6 互斥（drqv2/logger.py 模块级 import SummaryWriter，装不掉）。
+$PY -m pip install torchvision==0.22.1 "tensorboard==2.19.0" pytest
+$PY -m pip install "matplotlib==3.7.5"     # Stage-1 的 slot alpha 可视化
+
+# !!! 必须放在最后：上面若干包（distracting-control 经由老 gym、
+# matplotlib/tensorboard 的新版）都会把 numpy 顶到 2.x，而 dm_control 索引层
+# 依赖 numpy 1.x 的 np.array(copy=False) 语义，一升级就在 replay buffer /
+# observation spec 处炸。opencv 也必须 <4.12（5.x 强制 numpy>=2）。
+$PY -m pip install "numpy==1.24.4" "opencv-python-headless<4.12" "protobuf==5.29.6"
+$PY -c "import numpy; assert numpy.__version__.startswith('1.24'), numpy.__version__; print('numpy pinned OK')"
+
 echo "=== versions ==="
 $PY - <<'EOF'
 import importlib.metadata as md

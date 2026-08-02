@@ -8,12 +8,30 @@
     "seed": 1,
     "task": "cheetah-run"
   },
+  "cheetah-run|1|w12_pixel_rerun": {
+    "ckpt_mtime": 1785614246.0816689,
+    "episodes": 30,
+    "eval_seconds": 182.4,
+    "exp_name": "w12_pixel_rerun",
+    "reward": 260.9,
+    "seed": 1,
+    "task": "cheetah-run"
+  },
   "cheetah-run|2|w12_pixel": {
     "ckpt_mtime": 1785513318.981668,
     "episodes": 30,
     "eval_seconds": 390.1,
     "exp_name": "w12_pixel",
     "reward": 427.9,
+    "seed": 2,
+    "task": "cheetah-run"
+  },
+  "cheetah-run|2|w12_pixel_rerun": {
+    "ckpt_mtime": 1785625516.0982974,
+    "episodes": 30,
+    "eval_seconds": 163.1,
+    "exp_name": "w12_pixel_rerun",
+    "reward": 638.3,
     "seed": 2,
     "task": "cheetah-run"
   },

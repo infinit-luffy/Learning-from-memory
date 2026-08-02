@@ -1,0 +1,362 @@
+{
+  "cheetah-run|1|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 245.9,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 27.8,
+    "seed": 1,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|1|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 258.3,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 31.3,
+    "seed": 1,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|1|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 153.1,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 475.0,
+    "seed": 1,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|2|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 262.9,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 19.9,
+    "seed": 2,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|2|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 249.8,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 21.5,
+    "seed": 2,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|2|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 169.4,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 431.4,
+    "seed": 2,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|3|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 251.7,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 28.5,
+    "seed": 3,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|3|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 285.8,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 32.9,
+    "seed": 3,
+    "train_task": "cheetah-run"
+  },
+  "cheetah-run|3|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 262.9,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 423.1,
+    "seed": 3,
+    "train_task": "cheetah-run"
+  },
+  "dcs-easy-cheetah-run|1|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 284.8,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 300.8,
+    "seed": 1,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|1|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 254.0,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 143.4,
+    "seed": 1,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|1|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 152.2,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 110.1,
+    "seed": 1,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|2|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 257.5,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 470.0,
+    "seed": 2,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|2|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 265.6,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 238.1,
+    "seed": 2,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|2|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 155.8,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 134.3,
+    "seed": 2,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|3|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 263.4,
+    "eval_task": "dcs-easy-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 398.4,
+    "seed": 3,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|3|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 267.8,
+    "eval_task": "dcs-hard-cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 194.0,
+    "seed": 3,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-cheetah-run|3|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 152.9,
+    "eval_task": "cheetah-run",
+    "exp_name": "w12_pixel",
+    "reward": 111.3,
+    "seed": 3,
+    "train_task": "dcs-easy-cheetah-run"
+  },
+  "dcs-easy-walker-walk|1|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 250.8,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 753.8,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 253.9,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 540.8,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 180.6,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 497.6,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|2|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 261.4,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 924.8,
+    "seed": 2,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|2|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 250.0,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 709.9,
+    "seed": 2,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|2|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 154.1,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 627.7,
+    "seed": 2,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|3|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 245.0,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 882.4,
+    "seed": 3,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|3|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 245.1,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 648.3,
+    "seed": 3,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|3|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 152.9,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 544.4,
+    "seed": 3,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "walker-walk|1|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 247.1,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 81.9,
+    "seed": 1,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|1|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 249.0,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 104.1,
+    "seed": 1,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|1|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 171.7,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 849.1,
+    "seed": 1,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|2|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 246.0,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 67.5,
+    "seed": 2,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|2|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 247.4,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 102.7,
+    "seed": 2,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|2|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 153.7,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 935.4,
+    "seed": 2,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|3|easy|w12_pixel": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 248.4,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 78.0,
+    "seed": 3,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|3|hard|w12_pixel": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 258.0,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 84.5,
+    "seed": 3,
+    "train_task": "walker-walk"
+  },
+  "walker-walk|3|none|w12_pixel": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 173.8,
+    "eval_task": "walker-walk",
+    "exp_name": "w12_pixel",
+    "reward": 963.4,
+    "seed": 3,
+    "train_task": "walker-walk"
+  }
+}

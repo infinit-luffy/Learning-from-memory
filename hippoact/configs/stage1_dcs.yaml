@@ -1,0 +1,75 @@
+# Stage-1 on DCS walker-walk — CP6 定型配方，用于 A5000 上重训
+# （W1.1 的 checkpoint 留在已退役的 5080 上，未迁移；重训比等迁移便宜）
+#
+# 与 configs/default.yaml 的差异只有三处，全部来自 CP6 的定型结论：
+#   loss.slow_signal   content_diff -> alpha_connectivity   (Cohen's d −1.25 → +1.89)
+#   encoder.slot_iters / slot_dim    刻意退回最简 3 / 128    (CP6.4)
+#   train.slot_init_mode             shared                 (连通性是逐帧信号，
+#                                    不需要跨帧身份 —— CP6.5)
+# 其余保持 default.yaml，避免多变量。
+
+encoder:
+  dino_model: dinov2_vits14
+  image_size: 224
+  patch_size: 14                 # 224 / 14 = 16 → 16×16 = 256 patch tokens
+
+  num_slots: 16
+  slot_dim: 128                  # CP6 定型
+  slot_iters: 3                  # CP6 定型
+  slot_hidden: 256
+  slot_query_mode: sampled
+
+  router_hidden: 64
+  gumbel_tau_init: 1.0
+  gumbel_tau_min: 0.3
+  gumbel_tau_decay: 0.9995
+  # CP6.6 保留 1：router 实际给出 41–44% slow，先验 0.7 与之打架，
+  # L_route 升到 0.15–0.26（健康区间 [0.001, 0.1]）。本轮**不动它**，
+  # 保持与 W1.1 同配方以便复现判据；调先验留作后续单变量实验。
+  route_prior_slow: 0.7
+
+  binding_layers: 4
+  binding_heads: 4
+  binding_dropout: 0.1
+  proprio_dim: 32
+  c_dim: 128
+  t_window: 4
+
+loss:
+  lambda_slot: 1.0
+  lambda_slow: 0.5
+  lambda_route: 0.05
+  lambda_div: 0.05
+  lambda_predict: 0.5
+  lambda_align: 0.1
+  lambda_swap: 0.3
+  align_eps: 0.05
+  align_tau: 0.1
+  slow_variant: soft_bce
+  slow_temperature: 1.0
+  slow_signal: alpha_connectivity    # ← CP6 的核心改动
+
+train:
+  stage1_steps: 30000            # 48000 对 / batch 256 ≈ 187 步/epoch → ~160 epoch
+  stage1_lr: 3.0e-4
+  stage1_wd: 1.0e-4
+  batch_size: 256
+  warmup_steps: 2000
+  grad_clip: 20.0
+  device: cuda
+  seed: 0
+  swap_prob: 0.3
+  slot_init_mode: shared         # ← CP6 定型
+
+safety:
+  quantile: 0.95
+  n_calibration_frames: 500
+
+log:
+  wandb_project: hippoact
+  wandb_entity: null
+  log_every: 50
+  eval_every: 5000
+  ckpt_every: 5000
+  viz_every: 2000
+  out_dir: outputs

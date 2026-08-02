@@ -87,6 +87,41 @@ def last_eval_step(job):
         return -1
 
 
+def claim(job):
+    """Take an exclusive claim on a job's output dir; False if someone holds it.
+
+    Two queues over overlapping job files once started the *same* run twice,
+    both writing the same work_dir. The queue keeps its job list in memory, so
+    editing the file cannot fix that after the fact — the claim has to live on
+    disk, next to the output the job would corrupt.
+
+    A claim whose pid is gone is stale (crash / kill) and gets taken over.
+    """
+    wd = work_dir(job)
+    wd.mkdir(parents=True, exist_ok=True)
+    lock = wd / ".claim"
+    if lock.exists():
+        try:
+            pid = int(lock.read_text().split()[0])
+            os.kill(pid, 0)          # raises unless the holder is alive
+            return False
+        except (ValueError, IndexError, ProcessLookupError):
+            pass                     # stale claim, fall through and take it
+        except PermissionError:
+            return False             # alive, owned by another user
+    lock.write_text(f"{os.getpid()} {datetime.now().isoformat()}\n")
+    return True
+
+
+def release(job):
+    lock = work_dir(job) / ".claim"
+    try:
+        if lock.exists() and int(lock.read_text().split()[0]) == os.getpid():
+            lock.unlink()
+    except Exception:
+        pass
+
+
 def build_cmd(job, gpu):
     if job.get("runner") == "drqv2":
         # `steps` is agent steps for both runners; DrQ-v2 counts frames.
@@ -181,6 +216,7 @@ def main():
             proc, job, gpu, fh, t0 = entry
             if proc.poll() is not None:
                 fh.close()
+                release(job)
                 slots[gpu] -= 1
                 running.remove(entry)
                 mins = (time.time() - t0) / 60
@@ -193,6 +229,10 @@ def main():
         for gpu in gpus:
             while queue and slots[gpu] < args.slots_per_gpu:
                 job = queue.pop(0)
+                if not claim(job):
+                    print(f"[queue] SKIP {job['task']} seed={job['seed']} "
+                          f"— claimed by another queue", flush=True)
+                    continue
                 log_path = CONSOLE_DIR / f"{job['task']}_s{job['seed']}_{job['exp_name']}.log"
                 fh = open(log_path, "a", buffering=1)
                 fh.write(f"\n===== launch {datetime.now().isoformat()} gpu={gpu} =====\n")
