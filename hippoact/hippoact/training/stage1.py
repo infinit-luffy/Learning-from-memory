@@ -21,6 +21,7 @@ from hippoact.losses import (
     slot_reconstruction_loss,
     slow_temporal_loss,
     slow_temporal_loss_soft,
+    slow_connectivity_loss,
 )
 from hippoact.utils.slot_matching import match_slots_nn
 
@@ -46,6 +47,16 @@ class Stage1Config:
     # for A/B).
     slow_variant: str = "soft_bce"
     slow_temperature: float = 1.0
+    # Routing signal for L_slow.
+    #   "content_diff"      : temporal variance of the slot vector (legacy).
+    #   "alpha_connectivity": spatial connectivity of the slot alpha map.
+    # content_diff is dominated by slot drift rather than world motion:
+    # background slots wander (no unique assignment over 95% of the frame)
+    # while an object slot that tracks its object stays stable, so the
+    # router learns the inverted split -- Cohen's d = -1.25 against exact
+    # ground-truth masks. alpha_connectivity is a per-frame property and
+    # needs no cross-frame slot identity at all (CP6: d -1.25 -> +1.89).
+    slow_signal: str = "content_diff"
     # How to initialize slot queries across the paired forward passes.
     #  "random"    — independent fresh sample per frame (baseline)
     #  "shared"    — one fresh sample used for both frames (kills init noise
@@ -226,7 +237,12 @@ class Stage1Trainer:
             "L_route":  route_prior_kl(logits, prior_slow=self.cfg.route_prior_slow),
             "L_div":    slot_diversity_loss(slots),
         }
-        if prev_for_slow is not None:
+        if self.cfg.slow_signal == "alpha_connectivity":
+            # Per-frame signal: no prev frame, no matching, no shared init needed.
+            losses["L_slow"] = slow_connectivity_loss(
+                alpha, logits, temperature=self.cfg.slow_temperature
+            )
+        elif prev_for_slow is not None:
             if self.cfg.slow_variant == "soft_bce":
                 losses["L_slow"] = slow_temporal_loss_soft(
                     slots, prev_for_slow, logits,
