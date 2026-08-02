@@ -78,6 +78,29 @@ walker-walk + cheetah-run，clean + distracting-easy，500K steps × 3 seeds
 
 E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
 
+## ⚡ R1/R2/R4 拍板结果（2026-08-02，cowork）
+
+1. **R1 指标定义（已定）**：Q2 采用双比值，均以训练分布为锚 —
+   escalation retention = R_hard/R_easy；background-presence invariance
+   = R_none/R_easy。none 崩塌现象本身写入论文（pixel 把背景存在性学进
+   表征）并升级为可测预测：HippoAct 应三分布近平坦，pixel 实测
+   invariance 0.65/0.30。§IV.C 已改。
+2. **R2 判据（已定）**：P2.2b 的 480 单点阈值作废（sd≈140 下无统计意义，
+   判据修订透明记录）。cheetah clean 报全量 5-run 445±139，与官方
+   537±74 做 Welch（t≈1.2, n.s.）→ 管线与官方无显著差异。固定 seed
+   不可复现现象写入 §IV.A。加 seed 至 8 = 低优先级排队项。
+3. **R4（先试零成本解法）**：
+   a. **先试从 5080 磁盘 scp W1.1 checkpoint**（退役 ≠ 磁盘不可访问，
+      几分钟即可消除全部歧义）。拿到后用 W1.1 ckpt 起 E2E-0。
+   b. 5080 确实不可访问 → 用重训 ckpt_final 起 E2E-0（判据 0.8× 不变），
+      富集差距未必传导到 return；E2E-0 过 → 歧义不 material；
+      不过 → 起 3-seed Stage-1 方差实验（~22h）判断 W1.1 是否幸运抽样。
+   c. 代码已修：Stage-1 ckpt 现在自带完整 config 快照（trainer_config +
+      encoder_arch 从模块实读，不可漂移）。以后不再有"配置没留档"。
+4. **R4.5 三件集成事项**按 agent 清单执行：encoder_type 分发接线、
+   224² ImageNet-norm obs wrapper、MPPI 单次调用 smoke test。
+   三件齐 → E2E-0 起跑（多点位判据不变）。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）

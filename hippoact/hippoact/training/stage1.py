@@ -21,7 +21,6 @@ from hippoact.losses import (
     slot_reconstruction_loss,
     slow_temporal_loss,
     slow_temporal_loss_soft,
-    slow_connectivity_loss,
 )
 from hippoact.utils.slot_matching import match_slots_nn
 
@@ -47,16 +46,6 @@ class Stage1Config:
     # for A/B).
     slow_variant: str = "soft_bce"
     slow_temperature: float = 1.0
-    # Routing signal for L_slow.
-    #   "content_diff"      : temporal variance of the slot vector (legacy).
-    #   "alpha_connectivity": spatial connectivity of the slot alpha map.
-    # content_diff is dominated by slot drift rather than world motion:
-    # background slots wander (no unique assignment over 95% of the frame)
-    # while an object slot that tracks its object stays stable, so the
-    # router learns the inverted split -- Cohen's d = -1.25 against exact
-    # ground-truth masks. alpha_connectivity is a per-frame property and
-    # needs no cross-frame slot identity at all.
-    slow_signal: str = "content_diff"
     # How to initialize slot queries across the paired forward passes.
     #  "random"    — independent fresh sample per frame (baseline)
     #  "shared"    — one fresh sample used for both frames (kills init noise
@@ -237,12 +226,7 @@ class Stage1Trainer:
             "L_route":  route_prior_kl(logits, prior_slow=self.cfg.route_prior_slow),
             "L_div":    slot_diversity_loss(slots),
         }
-        if self.cfg.slow_signal == "alpha_connectivity":
-            # Per-frame signal: no prev frame, no matching, no shared init needed.
-            losses["L_slow"] = slow_connectivity_loss(
-                alpha, logits, temperature=self.cfg.slow_temperature
-            )
-        elif prev_for_slow is not None:
+        if prev_for_slow is not None:
             if self.cfg.slow_variant == "soft_bce":
                 losses["L_slow"] = slow_temporal_loss_soft(
                     slots, prev_for_slow, logits,
@@ -369,11 +353,30 @@ class Stage1Trainer:
     def _save_ckpt(self, step: int, final: bool = False) -> None:
         name = f"ckpt_final.pt" if final else f"ckpt_step{step:07d}.pt"
         p = self.out_dir / name
+        # Full provenance snapshot (R4.3 lesson: W1.1's exact config was not
+        # archived, making a later quality gap between two Stage-1 runs
+        # undiagnosable). Encoder architecture params are read back from the
+        # module itself so the snapshot cannot drift from reality.
+        enc = self.enc
+        arch = {
+            "num_slots": enc.num_slots,
+            "slot_dim": enc.slot_dim,
+            "t_window": enc.t_window,
+            "c_dim": enc.c_dim,
+            "slot_iters": enc.slot_attn.iters,
+            "learned_queries": getattr(enc.slot_attn, "learned_queries", False),
+            "dino_model": enc.dino.model_name,
+            "dino_is_mock": enc.dino.is_mock,
+            "image_size": enc.dino.image_size,
+        }
         payload = {
             "step": step,
-            "encoder": self.enc.state_dict(),
+            "encoder": enc.state_dict(),
             "optim": self.optim.state_dict(),
-            "gumbel_tau": float(self.enc.router.tau.item()),
+            "gumbel_tau": float(enc.router.tau.item()),
+            "trainer_config": dict(self.cfg.__dict__),
+            "encoder_arch": arch,
+            "torch_version": torch.__version__,
         }
         torch.save(payload, p)
-        print(f"[Stage1] saved checkpoint → {p}")
+        print(f"[Stage1] saved checkpoint → {p} (with config snapshot)")
