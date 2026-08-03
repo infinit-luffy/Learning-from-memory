@@ -146,6 +146,61 @@ def main():
     ok &= c5
 
     print("=" * 72)
+    print("4. fast path: env-side encoding must equal in-model encoding")
+    # This is the claim the whole speedup rests on. With Stage-1 frozen the two
+    # are the same map; assert it on real frames instead of trusting it.
+    cfg3 = build_cfg("dcs-easy-walker-walk", "state", hippoact_precompute=CKPT)
+    env3 = make_env(cfg3)
+    print(f"   obs_shape = {dict(cfg3.obs_shape)}  "
+          f"(= {adapter.num_slots}x{adapter.slot_dim} + proprio)")
+    o3 = env3.reset()
+    obs_env = o3[:adapter.num_slots * adapter.slot_dim]
+
+    # Same physics state, same render. Walk down to DMControlWrapper rather
+    # than counting wrappers (TensorWrapper/Timeout/HippoActSlots/DMControl).
+    dmc_env = env3
+    while type(dmc_env).__name__ != "DMControlWrapper":
+        dmc_env = dmc_env.env
+    f1 = dmc_env.render(width=224, height=224)
+    f2 = dmc_env.render(width=224, height=224)
+    dpix = int(np.abs(f1.astype(np.int32) - f2.astype(np.int32)).max())
+    print(f"   render determinism: max|Δpixel| = {dpix}")
+
+    # Feed that exact frame through a freshly built extractor — i.e. the code
+    # path the in-model adapter uses. This is the claim the speedup rests on.
+    from hippoact.adapters.slot_features import SlotFeatureExtractor
+    rgb = torch.from_numpy(np.ascontiguousarray(f1.transpose(2, 0, 1)))
+    with torch.no_grad():
+        obs_model = SlotFeatureExtractor(CKPT).cuda().eval()(
+            rgb.unsqueeze(0).cuda()).squeeze(0).cpu()
+    dmax = float((obs_env - obs_model).abs().max())
+    c6 = dpix == 0 and dmax < 1e-5
+    print(f"   max|Δ features| env-side vs in-model = {dmax:.3e} "
+          f"-> {'PASS' if c6 else 'FAIL'}")
+    nonzero = int((obs_env != 0).sum())
+    print(f"   non-zero slot features: {nonzero}/{len(obs_env)} "
+          f"(zeros are slow-routed slots, expected)")
+    ok &= c6
+
+    # The equivalence only holds because the encoder is a deterministic
+    # function of the frame. In `sampled` query mode it is not, unless the slot
+    # init is fixed — assert that here rather than assuming it.
+    ex_a = SlotFeatureExtractor(CKPT, slot_init_seed=0).cuda().eval()
+    ex_b = SlotFeatureExtractor(CKPT, slot_init_seed=0).cuda().eval()
+    ex_c = SlotFeatureExtractor(CKPT, slot_init_seed=1).cuda().eval()
+    r = rgb.unsqueeze(0).cuda()
+    with torch.no_grad():
+        fa, fb, fc = ex_a(r).clone(), ex_b(r).clone(), ex_c(r).clone()
+    d_same = float((fa - fb).abs().max())
+    d_diff = float((fa - fc).abs().max())
+    c7 = d_same < 1e-6 and d_diff > 1e-3
+    print(f"   two instances, slot_init_seed=0: max|Δ| = {d_same:.2e} (must be 0)")
+    print(f"   slot_init_seed 0 vs 1:           max|Δ| = {d_diff:.2f} "
+          f"(the init is part of the encoder's identity — CP5e)")
+    print(f"   -> {'PASS' if c7 else 'FAIL'}")
+    ok &= c7
+
+    print("=" * 72)
     print("RESULT:", "ALL PASS" if ok else "CHECK FAILURES ABOVE")
     return 0 if ok else 1
 

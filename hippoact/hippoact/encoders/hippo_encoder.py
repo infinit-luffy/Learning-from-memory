@@ -90,7 +90,8 @@ class HippoActEncoder(nn.Module):
 
     # ---- Per-frame API -------------------------------------------------
 
-    def encode_frame(self, img: torch.Tensor, decode: bool = True) -> EncoderOutput:
+    def encode_frame(self, img: torch.Tensor, decode: bool = True,
+                     slots_init: torch.Tensor | None = None) -> EncoderOutput:
         """Encode a single frame. img: (B, 3, H, W).
 
         `decode=False` skips the slot decoder. Stage-1 needs `recon`/`alpha`
@@ -101,7 +102,11 @@ class HippoActEncoder(nn.Module):
         approximation, whenever the caller ignores recon/alpha.
         """
         feats = self.dino(img)                              # (B, N, D_v)
-        slots = self.slot_attn(feats)                       # (B, K, D_s)
+        # `slots_init` makes the encoder a deterministic function of the frame.
+        # In `sampled` query mode the slots are separated only by the noise in
+        # `sample_init`, so without a fixed init the same frame encodes
+        # differently every call — see adapters/slot_features.py.
+        slots = self.slot_attn(feats, slots_init=slots_init)   # (B, K, D_s)
         if decode:
             recon, alpha = self.slot_decoder(slots)         # (B, N, D_v), (B, K, N)
         else:

@@ -1548,3 +1548,79 @@ E2E-0 的 Stage-1 编码器是**冻结**的，因此某一帧的 slots 永不改
 
 **在拍板前 E2E-0 不起跑**——用现状跑等于烧 22 天换一个本可 2 小时得到的相同结果。
 
+---
+
+# R4.6 E2E-0 快路径：把冻结编码器放进 env —— 并因此发现编码器不是确定性函数
+
+按拍板实现「冻结 encoder 前移到环境」。实现过程中断言把两个**比速度更要紧**的
+问题抓了出来。
+
+## R4.6.1 实现
+
+`obs=state` + `hippoact_precompute=<ckpt>` → env 直接产出
+`[flatten(fast_slots) ⊕ q_t]` = 16×128 + 24 = **2072 维向量**，
+**TD-MPC2 本体一行不改**，用它自己的 state encoder 当 z_mlp。
+
+冻结部分抽成 `hippoact/adapters/slot_features.py::SlotFeatureExtractor`，
+env 侧与 in-model 侧**共用同一个类** —— 等价性是结构性的，不靠断言。
+in-model 路径（`encoder_type=hippoact`）保留，供 E2E-1/2 把编码器放进训练图时用。
+
+## R4.6.2 实测
+
+| | in-model（原方案） | env 前移（本方案） |
+|---|---|---|
+| 每步 DINOv2 前向 | 1024 帧 | **1 帧** |
+| 稳态 SPS | 0.26 | **6.3** |
+| 500K 步 | **22.6 天** | **~22 小时** |
+| buffer/帧 | 147 KB | **8.75 KB**（实测 0.07 GB / 8000） |
+| buffer @500K | 75 GB | **4.4 GB** |
+| E2E-0 的 fork 改动 | 4 文件 +62 −2 | **0**（只多一个 config 键） |
+
+smoke test 四项全过，**env 侧与 in-model 的特征 max\|Δ\| = 0.000e+00**。
+
+比预估的 3 小时慢，因为下限不是 update 而是**每个 env step 的 encoder**
+（14.6 ms）+ 224² 渲染。6.3 SPS 是这两项的合成。
+
+## R4.6.3 顺带修掉一个我自己引入的架构偏离
+
+TD-MPC2 的两个 encoder（state 与 rgb）**末尾都有 `SimNorm`**——把 latent 切成
+8 维一组做 softmax，它的 dynamics / reward / Q 全建立在这个单纯形结构上。
+**我手写的 `z_mlp` 末尾是裸 Linear，没有 SimNorm**，等于给 TD-MPC2 喂一个它
+从未设计过的潜空间。改用 TD-MPC2 自带 state encoder 后自动修好。
+
+## R4.6.4 **编码器不是确定性函数**（本轮最重要的发现）
+
+写「env 侧 == in-model」这条断言时它 FAIL 了，`max|Δ| = 15.8`。查下去：
+
+```
+同一张图，编码两次:  max|Δ| = 8.5
+```
+
+原因：`slot_query_mode: sampled` 下 `slots_mu` 形状是 `(1,1,D)`——**16 个 slot
+共享同一个 mu，全靠 `sample_init` 里的噪声打破对称**。所以每次 forward 都是
+一次新抽样，同一帧编码两次得到不同的 slots。
+
+这**同时**破坏三件事，且与是否预计算无关：
+1. buffer 里存的表征与重新编码得到的不一致
+2. `act()` 把同一个观测映射到不同的 latent
+3. MPC 从一个带噪的 latent 出发做规划
+
+**不能简单去掉噪声**（mu 共享，去噪后 16 个 slot 会完全相同、分解坍缩）。
+已实现的解法是**固定一次抽样**：`slot_init_seed` 播种一次、注册为 buffer，
+推理时复用。这与 CP6/adapter already 采用的「部署用 argmax 而非 Gumbel」
+是同一个理由。
+
+验证：
+
+```
+两个独立实例、同 slot_init_seed=0     max|Δ| = 0.00e+00
+slot_init_seed = 0  vs  1            max|Δ| = 16.16
+```
+
+**这个 init 的选择是任意的，且影响很大**——与 CP5e 早已测到的
+「同图换 init → alpha 余弦 0.189」是同一现象。所以 `slot_init_seed`
+**是编码器身份的一部分，必须与 checkpoint 一起报告**；换个 seed 就是换个编码器。
+
+论文含义：Stage-1 训出来的编码器**并不定义唯一的分解**。这在 CP5e 已被量化，
+但它对 Stage-2 的后果直到现在才显出来。§V 应写明。
+

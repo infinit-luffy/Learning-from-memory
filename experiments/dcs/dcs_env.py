@@ -125,5 +125,12 @@ def make_env(cfg):
     elif cfg.obs == "hippoact":
         from experiments.dcs.hippoact_obs import HippoActObs
         env = HippoActObs(env, size=int(cfg.get("hippoact_image_size", 224)))
+    elif cfg.obs == "state" and cfg.get("hippoact_precompute", ""):
+        # E2E-0 fast path: apply the frozen HippoAct encoder here, so TD-MPC2
+        # sees a plain state vector [flatten(fast_slots) ⊕ q_t] and runs
+        # completely unmodified. See experiments/dcs/hippoact_slots.py.
+        from experiments.dcs.hippoact_slots import HippoActSlots
+        env = HippoActSlots(env, str(cfg.hippoact_precompute),
+                            size=int(cfg.get("hippoact_image_size", 224)))
     env = Timeout(env, max_episode_steps=500)
     return env

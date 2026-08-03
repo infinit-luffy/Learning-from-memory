@@ -1,0 +1,76 @@
+"""E2E-0 observation: the frozen HippoAct encoder, applied in the environment.
+
+    obs = [ flatten(fast_slots) ⊕ q_t ]        (16*128 + 24 = 2072 floats)
+
+which is exactly the E2E-0 contract's input. TD-MPC2 then runs with
+`obs=state` and **no modification at all** — its own state encoder
+(`mlp(..., act=SimNorm)`) is the trainable MLP of `z = MLP(flatten(S_fg) ⊕ q)`.
+
+Why this rather than encoding inside the world model
+----------------------------------------------------
+Identical function, ~180x cheaper, and it removes an architecture deviation:
+
+* **Identical.** Stage-1 is frozen at E2E-0, so a frame's slots never change.
+  Encoding at env-step time and encoding at sample time are the same map; the
+  shared `SlotFeatureExtractor` is literally the same class both ways.
+* **Cheaper.** TD-MPC2 runs one update per env step over (horizon+1) x batch =
+  1024 frames. Encoding inside the model re-runs DINOv2 on all 1024 every step
+  (measured 3882 ms/step -> 22.6 days for 500K). Here DINOv2 runs once per env
+  step. The buffer also drops from 147 KB/frame to 8.3 KB (75 GB -> 4 GB).
+* **Architecturally faithful.** Both of TD-MPC2's own encoders end in SimNorm,
+  and its dynamics/reward/Q are built on that simplicial latent. A hand-written
+  z_mlp without SimNorm feeds the model a latent it was never designed for.
+  Using the stock state encoder keeps that exactly right.
+
+The in-model path (`encoder_type=hippoact`) is still needed when the encoder
+joins the training graph — i.e. E2E-1/E2E-2 if Stage-1 is unfrozen. Keeping
+Stage-1 frozen across all three levels keeps this fast path valid *and* keeps
+the build-up ablation single-variable (each level adds a module rather than
+adding a module and unfreezing the encoder at the same time).
+"""
+from __future__ import annotations
+
+import gymnasium as gym
+import numpy as np
+import torch
+
+HIPPOACT_IMAGE_SIZE = 224
+
+
+class HippoActSlots(gym.Wrapper):
+    """DMControlWrapper -> flat [fast_slots ⊕ proprio] float32 vector."""
+
+    def __init__(self, env, stage1_ckpt: str, device: str = "cuda",
+                 size: int = HIPPOACT_IMAGE_SIZE):
+        super().__init__(env)
+        import sys
+        from pathlib import Path
+        root = Path(__file__).resolve().parents[2]
+        for p in (str(root / "hippoact"), str(root)):
+            if p not in sys.path:
+                sys.path.insert(0, p)
+        from hippoact.adapters.slot_features import SlotFeatureExtractor
+
+        self.env = env
+        self._size = size
+        self._device = torch.device(device if torch.cuda.is_available() else "cpu")
+        self.extractor = SlotFeatureExtractor(stage1_ckpt).to(self._device).eval()
+
+        proprio_dim = int(env.observation_space.shape[0])
+        self._dim = self.extractor.feature_dim + proprio_dim
+        self.observation_space = gym.spaces.Box(
+            low=-np.inf, high=np.inf, shape=(self._dim,), dtype=np.float32)
+
+    def _obs(self, state) -> torch.Tensor:
+        frame = self.env.render(width=self._size, height=self._size)   # (S,S,3) uint8
+        rgb = torch.from_numpy(np.ascontiguousarray(frame.transpose(2, 0, 1)))
+        feat = self.extractor(rgb.unsqueeze(0).to(self._device)).squeeze(0).cpu()
+        state = state if torch.is_tensor(state) else torch.from_numpy(state)
+        return torch.cat([feat, state.float()])
+
+    def reset(self):
+        return self._obs(self.env.reset())
+
+    def step(self, action):
+        state, reward, done, info = self.env.step(action)
+        return self._obs(state), reward, done, info
