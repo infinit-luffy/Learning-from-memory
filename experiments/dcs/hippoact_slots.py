@@ -41,7 +41,8 @@ class HippoActSlots(gym.Wrapper):
     """DMControlWrapper -> flat [fast_slots ⊕ proprio] float32 vector."""
 
     def __init__(self, env, stage1_ckpt: str, device: str = "cuda",
-                 size: int = HIPPOACT_IMAGE_SIZE, slot_init_seed: int = 0):
+                 size: int = HIPPOACT_IMAGE_SIZE, slot_init_seed: int = 0,
+                 include_proprio: bool = True):
         super().__init__(env)
         import sys
         from pathlib import Path
@@ -60,9 +61,15 @@ class HippoActSlots(gym.Wrapper):
         # moves the features by max|Δ| = 16.2), so every run's log must say
         # which one it used, not just which checkpoint.
         print(f"[HippoActSlots] ckpt={stage1_ckpt} slot_init_seed={slot_init_seed} "
-              f"feature_dim={self.extractor.feature_dim}", flush=True)
+              f"feature_dim={self.extractor.feature_dim} "
+              f"include_proprio={include_proprio}", flush=True)
 
-        proprio_dim = int(env.observation_space.shape[0])
+        # walker-walk is solvable from proprio alone (TD-MPC2 state obs reaches
+        # 979), so including it makes the visual representation unmeasurable —
+        # E2E-0 then tracks the proprio-only baseline exactly. `include_proprio
+        # = False` gives the vision-only control this comparison needs.
+        self._include_proprio = include_proprio
+        proprio_dim = int(env.observation_space.shape[0]) if include_proprio else 0
         self._dim = self.extractor.feature_dim + proprio_dim
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._dim,), dtype=np.float32)
@@ -71,6 +78,8 @@ class HippoActSlots(gym.Wrapper):
         frame = self.env.render(width=self._size, height=self._size)   # (S,S,3) uint8
         rgb = torch.from_numpy(np.ascontiguousarray(frame.transpose(2, 0, 1)))
         feat = self.extractor(rgb.unsqueeze(0).to(self._device)).squeeze(0).cpu()
+        if not self._include_proprio:
+            return feat
         state = state if torch.is_tensor(state) else torch.from_numpy(state)
         return torch.cat([feat, state.float()])
 

@@ -1811,3 +1811,82 @@ Fisher 单侧 p = 0.016   **显著**
 所以「失败」不是「快起飞了被截断」——延长到官方的 1.1M 也救不回来。
 但它说明**判定失败需要看完整曲线**，不能只看某个中间点位。
 
+
+---
+
+# R4.8 E2E-0 的对比是坏的：**proprio 混淆**（本轮最重要的发现）
+
+E2E-0 三个 run 到 350K 步的数字很好看，但**不能当作 HippoAct 赢**。
+
+## R4.8.1 现象
+
+`dcs-easy-walker-walk`，RL seed 均为 1，agent step：
+
+| agent step | E2E-0 (n=3) | pixel 基线 (n=3) | 预注册判据 | **纯 proprio（官方 state-obs）** |
+|---:|---:|---:|---:|---:|
+| 50K  | 559.9 | 213.8 | 171 | **961.9** |
+| 100K | 925.2 | 391.4 | 313 | **973.4** |
+| 200K | 968.4 | 572.2 | 458 | **976.4** |
+| 250K | 976.1 | 675.5 | 540 | **978.7** |
+| 350K | 971.4 | 776.2 | —   | ~980 |
+
+最后一列来自 `third_party/tdmpc2/results/tdmpc2/walker-walk.csv`（作者随仓库发布的
+3-seed state-obs 曲线，env step 已除以 action_repeat=2 换算成 agent step）。
+
+**walker-walk 只用 24 维本体感受就能解到 979。**
+
+## R4.8.2 为什么这让整个对比失效
+
+E2E-0 的观测是 `[flatten(fast_slots) ⊕ q_t]` = **2048 + 24** 维。
+它的曲线与纯 proprio 基线重合（976 vs 979），50K 处还更差（560 vs 962）。
+
+→ **2048 维 slot 特征的贡献不可测**；能观察到的只有它拖慢了早期学习。
+
+而 pixel 基线**只看像素**。所以这张表测的是「proprio vs 像素」，
+不是「slot 表征 vs 像素表征」。判据 171/313/458/540 是照 pixel 基线定的，
+对一个拿到 proprio 的 agent 没有意义。
+
+更根本的一点：**背景干扰只作用于视觉通道，proprio 对它免疫。**
+只要观测里有 proprio，Q2 想测的「背景鲁棒性」就可以靠无视视觉白拿——
+在 walker-walk 上这个实验设计**根本测不到想测的东西**。
+
+这不是实现 bug。`hippoact_include_proprio` 默认 true 是照 E2E-0 契约
+`z = MLP(flatten(S_fg) ⊕ q)` 写的，契约本身在这个任务上就有这个洞。
+
+## R4.8.3 补的两组对照（已起跑，2026-08-04 01:55）
+
+| exp_name | 观测 | 目的 |
+|---|---|---|
+| `e2e0vis_s{1,3,5}` | 2048 维 slot，**无 proprio** | 唯一与 pixel 基线可比的 E2E-0 |
+| `proprio_only` | 24 维 proprio，无视觉 | 把上表最后一列钉死在我们自己的环境里，不引官方数字 |
+
+`e2e0vis` 除 `hippoact_include_proprio=false` 外与 `e2e0_s*` 逐字相同
+（同 Stage-1 seed 1/3/5、同 RL seed 1、同 500K 步）。
+纯视觉路径已 smoke 过：6K 步跑通，观测维度 2048，
+banner 记录 `include_proprio=False`。
+
+原来那三个带 proprio 的 run **不停**——它们是混淆存在的证据，留作记录。
+
+## R4.8.4 待定：判据与任务
+
+- 预注册判据（100K≥313 / 250K≥540）是对 pixel 基线定的，
+  `e2e0vis` 可以直接沿用；带 proprio 的那三个 run 不适用，其「达标」作废。
+- 如果 `proprio_only` 在 easy 上确实到 ~975，则 **walker-walk 不适合做 Q2 主任务**
+  ——需要一个 proprio 解不掉的任务。cheetah-run 官方 state-obs 也很高，
+  同样要查。这个决定留给用户。
+
+## R4.8.5 顺带：GPU 利用率只有 20% 的原因（不是问题）
+
+单步 37 ms，其中环境侧只占 11.6 ms（实测，GPU1 空载）：
+
+```
+env.step（物理 + DCS 背景合成）    5.72 ms
+env.render 224x224 (EGL)          1.14 ms
+SlotFeatureExtractor 前向 (b=1)   4.71 ms
+```
+
+剩下 ~25 ms 是 TD-MPC2 自己的 update + MPPI 规划（6 轮 × 512 条轨迹的小 MLP）。
+几百个微秒级 kernel，GPU 大部分时间在等 CPU 发射指令 —— **launch-latency bound**。
+每个进程恰好占满 1 个核，机器有 64 核。
+
+→ 单个 run 快不了，但可以并发。已从 3 个并发提到 7 个，四张卡都在用。

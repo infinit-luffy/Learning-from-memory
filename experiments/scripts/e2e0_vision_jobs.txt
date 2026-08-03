@@ -1,0 +1,19 @@
+# W2.1 E2E-0 **纯视觉对照** — 去掉 24 维本体感受，观测只有 flatten(fast_slots)。
+#
+# 为什么必须做这一组（§R4.8 proprio 混淆）：
+#   walker-walk 只用 proprio 就能解到 979（TD-MPC2 官方 state-obs 曲线）。
+#   带 proprio 的 E2E-0 在 250K 拿 976 —— 与纯 proprio 基线重合，2048 维 slot
+#   特征的贡献不可测。而且干扰只作用于视觉、proprio 对背景免疫，所以只要观测
+#   里有 proprio，Q2 想测的「背景鲁棒性」就可以靠无视视觉白拿。
+#
+#   与之对比的 pixel 基线只看像素。所以带 proprio 的对比测的是
+#   「proprio vs 像素」，不是「slot 表征 vs 像素表征」。
+#
+# 本组是唯一与 pixel 基线可比的 E2E-0 配置。
+# 唯一差异：`hippoact_include_proprio=false`（命令行 --extra 传入）。
+# 其余与 e2e0_jobs.txt 逐字相同：同 Stage-1 seed 1/3/5、RL seed 全部固定为 1。
+#
+# task                     seed  steps   exp_name
+dcs-easy-walker-walk         1  500000  e2e0vis_s1
+dcs-easy-walker-walk         1  500000  e2e0vis_s3
+dcs-easy-walker-walk         1  500000  e2e0vis_s5

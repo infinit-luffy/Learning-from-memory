@@ -155,7 +155,7 @@ def build_cmd(job, gpu):
             "save_agent=true",
             "eval_freq=25000",
             f"hydra.run.dir={hydra_dir}",
-        ]
+        ] + job.get("extra", [])
     if job.get("runner") == "drqv2":
         # `steps` is agent steps for both runners; DrQ-v2 counts frames.
         task, distraction = job["task"].rsplit("__", 1)
@@ -188,7 +188,7 @@ def build_cmd(job, gpu):
         "save_agent=true",
         "eval_freq=25000",
         f"hydra.run.dir={hydra_dir}",
-    ]
+    ] + job.get("extra", [])
 
 
 def main():
@@ -202,12 +202,17 @@ def main():
     ap.add_argument("--stagger", type=float, default=25.0,
                     help="seconds between launches (torch.compile is CPU-heavy at startup)")
     ap.add_argument("--dry-run", action="store_true")
+    ap.add_argument("--extra", default="",
+                    help="extra hydra overrides appended to every tdmpc2/e2e0 "
+                         "command, space-separated (e.g. "
+                         "'hippoact_include_proprio=false')")
     args = ap.parse_args()
 
     gpus = [int(g) for g in args.gpus.split(",")]
     jobs = parse_jobs(args.jobs)
     for job in jobs:
         job["runner"] = args.runner
+        job["extra"] = args.extra.split()
     CONSOLE_DIR.mkdir(parents=True, exist_ok=True)
 
     pending, skipped = [], []

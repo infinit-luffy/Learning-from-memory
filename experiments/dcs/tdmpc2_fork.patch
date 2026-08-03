@@ -53,10 +53,10 @@ index 3e36c36..455f802 100644
  			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
  		return self._encoder[self.cfg.obs](obs)
 diff --git a/tdmpc2/config.yaml b/tdmpc2/config.yaml
-index ff15dbb..dc95a49 100755
+index ff15dbb..862e0ca 100755
 --- a/tdmpc2/config.yaml
 +++ b/tdmpc2/config.yaml
-@@ -4,6 +4,11 @@ defaults:
+@@ -4,6 +4,24 @@ defaults:
  # environment
  task: dog-run
  obs: state
@@ -65,6 +65,19 @@ index ff15dbb..dc95a49 100755
 +encoder_type: default        # default | hippoact
 +hippoact_ckpt: ''            # Stage-1 checkpoint; required when encoder_type=hippoact
 +hippoact_finetune: false     # E2E-0 keeps Stage-1 modules frozen
++# E2E-0 fast path: with Stage-1 frozen, apply the encoder in the environment and
++# leave TD-MPC2 itself untouched (obs=state). Exactly the same function as
++# encoder_type=hippoact, ~180x cheaper. Set to a Stage-1 checkpoint path.
++hippoact_precompute: ''
++# The slot-query init is part of the encoder's identity, not an implementation
++# detail: in `sampled` mode the 16 slots are separated only by this draw, and
++# seed 0 vs 1 changes the features by max|Δ| = 16.2 (TODO_RESULT §R4.6.4).
++# Recorded here so every run's saved config carries it.
++hippoact_slot_init_seed: 0
++# walker-walk is solvable from proprio alone (state-obs TD-MPC2 reaches 979), so
++# with proprio included the slot features are unmeasurable. false = vision-only
++# control.
++hippoact_include_proprio: true
  episodic: false
  
  # evaluation
