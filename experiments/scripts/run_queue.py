@@ -143,6 +143,9 @@ def build_cmd(job, gpu):
             f"task={job['task']}",
             "obs=state",
             f"hippoact_precompute={ckpt}",
+            # Explicit, so the saved hydra config records which slot init the
+            # run used — it is part of the encoder's identity (§R4.6.4).
+            "hippoact_slot_init_seed=0",
             "model_size=5",
             f"steps={job['steps']}",
             f"seed={job['seed']}",

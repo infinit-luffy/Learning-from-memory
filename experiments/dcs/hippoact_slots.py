@@ -41,7 +41,7 @@ class HippoActSlots(gym.Wrapper):
     """DMControlWrapper -> flat [fast_slots ⊕ proprio] float32 vector."""
 
     def __init__(self, env, stage1_ckpt: str, device: str = "cuda",
-                 size: int = HIPPOACT_IMAGE_SIZE):
+                 size: int = HIPPOACT_IMAGE_SIZE, slot_init_seed: int = 0):
         super().__init__(env)
         import sys
         from pathlib import Path
@@ -54,7 +54,13 @@ class HippoActSlots(gym.Wrapper):
         self.env = env
         self._size = size
         self._device = torch.device(device if torch.cuda.is_available() else "cpu")
-        self.extractor = SlotFeatureExtractor(stage1_ckpt).to(self._device).eval()
+        self.extractor = SlotFeatureExtractor(
+            stage1_ckpt, slot_init_seed=slot_init_seed).to(self._device).eval()
+        # Print it: the init draw is part of the encoder's identity (seed 0 vs 1
+        # moves the features by max|Δ| = 16.2), so every run's log must say
+        # which one it used, not just which checkpoint.
+        print(f"[HippoActSlots] ckpt={stage1_ckpt} slot_init_seed={slot_init_seed} "
+              f"feature_dim={self.extractor.feature_dim}", flush=True)
 
         proprio_dim = int(env.observation_space.shape[0])
         self._dim = self.extractor.feature_dim + proprio_dim

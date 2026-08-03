@@ -1,0 +1,14 @@
+# DrQ-v2 作者随仓库发布的 walker_walk 曲线在 1M frames 处的 10 个 seed。
+# 来源: third_party/drqv2/curves/dmc_walker_walk.csv
+# 用途: 作为 clean 臂失败率的基线扩充（2/10 失败），见 README §3-4。
+seed,episode_reward,learned
+1,950,yes
+2,962,yes
+3,949,yes
+4,24,no
+5,960,yes
+6,956,yes
+7,960,yes
+8,29,no
+9,910,yes
+10,968,yes

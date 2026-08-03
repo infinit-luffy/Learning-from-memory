@@ -59,12 +59,30 @@ def eval_task_name(base, difficulty):
     return base if difficulty == "none" else f"dcs-{difficulty}-{base}"
 
 
+STAGE1_CKPT = (PROJECT_ROOT / "hippoact" / "outputs"
+               / "stage1_seed{seed}" / "ckpt_final.pt")
+
+
 def find_checkpoints(exp_name):
+    """`exp_name` matches exactly, or as a prefix (e2e0 -> e2e0_s1, e2e0_s3...).
+
+    The prefix form is how the E2E-0 family is addressed: one exp_name per
+    Stage-1 encoder, all evaluated on the same grid.
+    """
     out = []
-    for ckpt in sorted(LOG_ROOT.glob(f"*/*/{exp_name}/models/final.pt")):
+    for ckpt in sorted(LOG_ROOT.glob("*/*/*/models/final.pt")):
+        exp = ckpt.parent.parent.name
+        if exp != exp_name and not exp.startswith(exp_name + "_"):
+            continue
         seed = int(ckpt.parent.parent.parent.name)
         task = ckpt.parent.parent.parent.parent.name
-        out.append(dict(train_task=task, seed=seed, exp_name=exp_name, ckpt=str(ckpt)))
+        rec = dict(train_task=task, seed=seed, exp_name=exp, ckpt=str(ckpt))
+        # E2E-0 checkpoints need the frozen Stage-1 encoder in the env, and the
+        # Stage-1 seed is encoded in the exp_name suffix (e2e0_s3 -> seed 3).
+        m = re.search(r"^e2e0_s(\d+)$", exp)
+        if m:
+            rec["hippoact_ckpt"] = str(STAGE1_CKPT).format(seed=m.group(1))
+        out.append(rec)
     return out
 
 
@@ -75,11 +93,18 @@ def run_one(job, episodes, gpu):
     tag = f"{job['train_task']}_s{job['seed']}_on_{job['difficulty']}"
     cmd = [
         PYTHON, str(EVALUATE_PY),
-        f"task={job['eval_task']}", "obs=rgb", "model_size=5",
+        f"task={job['eval_task']}", "model_size=5",
         f"seed={job['seed']}", f"eval_episodes={episodes}", "save_video=false",
         f"checkpoint={job['ckpt']}",
         f"hydra.run.dir={LOG_ROOT / 'hydra_retention' / tag}",
     ]
+    if job.get("hippoact_ckpt"):
+        # E2E-0: TD-MPC2 sees a plain state vector; the frozen encoder lives in
+        # the env. slot_init_seed is part of the encoder's identity (§R4.6.4).
+        cmd[4:4] = ["obs=state", f"hippoact_precompute={job['hippoact_ckpt']}",
+                    "hippoact_slot_init_seed=0"]
+    else:
+        cmd.insert(4, "obs=rgb")
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=str(LAUNCH_DIR), env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
@@ -93,7 +118,8 @@ def run_one(job, episodes, gpu):
 def report(cache, exp_name):
     by = defaultdict(dict)          # train_task -> difficulty -> [rewards]
     for rec in cache.values():
-        if rec.get("exp_name") != exp_name:
+        e = rec.get("exp_name", "")
+        if e != exp_name and not e.startswith(exp_name + "_"):
             continue
         by[rec["train_task"]].setdefault(rec["difficulty"], []).append(rec["reward"])
 
@@ -148,7 +174,7 @@ def main():
     jobs = []
     for c in ckpts:
         for d in difficulties:
-            key = f"{c['train_task']}|{c['seed']}|{d}|{args.exp}"
+            key = f"{c['train_task']}|{c['seed']}|{d}|{c['exp_name']}"
             if key in cache and cache[key].get("episodes") == args.episodes:
                 continue
             jobs.append(dict(c, difficulty=d, key=key,

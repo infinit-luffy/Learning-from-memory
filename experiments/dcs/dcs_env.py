@@ -131,6 +131,7 @@ def make_env(cfg):
         # completely unmodified. See experiments/dcs/hippoact_slots.py.
         from experiments.dcs.hippoact_slots import HippoActSlots
         env = HippoActSlots(env, str(cfg.hippoact_precompute),
-                            size=int(cfg.get("hippoact_image_size", 224)))
+                            size=int(cfg.get("hippoact_image_size", 224)),
+                            slot_init_seed=int(cfg.get("hippoact_slot_init_seed", 0)))
     env = Timeout(env, max_episode_steps=500)
     return env
