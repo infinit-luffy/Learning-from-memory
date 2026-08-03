@@ -101,6 +101,25 @@ E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
    224² ImageNet-norm obs wrapper、MPPI 单次调用 smoke test。
    三件齐 → E2E-0 起跑（多点位判据不变）。
 
+## ⚡ R4.5–R4.7 / R3.2 拍板（2026-08-02，cowork）
+
+1. **E2E-0 三 encoder 设计批准，立即重启**（gpu0/1/2，Stage-1 seed 1/3/5，
+   env 前移快路径，~5.5h/run）。多点位判据不变（R4.7.3 的表）。
+   完成后**立刻接零成本 Q2 评测**：三个 500K ckpt 对 {none, easy, hard}
+   纯 eval → flat-invariance 预测（R1 新轴）的第一次检验。
+   预注册：HippoAct invariance (none/easy) 应显著高于 pixel 的 0.65/0.30；
+   escalation retention (hard/easy) 应高于 pixel 的 0.74/0.49。
+2. **slot_init_seed 定性采纳**：init 抽样是编码器身份的一部分，随 ckpt
+   报告。已写入论文 §IV.I。E2E 全部 run 记录所用 slot_init_seed。
+3. **R4.7.2 遵守**：论文引用 easy Cohen's d 用 5-seed 的 1.46±0.13，
+   不用 W1.1 单点 1.844。W1.1 数字保留在 §III.D.3 的富集度（在分布内）。
+4. **R3.2 双峰报告方式采纳**（学会率 + 学会者分数，已写入 §IV.A Metrics）。
+   **DrQ-v2 clean walker 2/6 失败先排查再披露**：半小时 diff 官方
+   walker_walk config（num_train_frames 1M vs 1.1M 线索）。查出 → 修 +
+   重跑失败的 2 个 clean seed；查不出 → 如实披露 + 列出已排查项。
+5. **低优先级队列**（卡空时）：cheetah clean 补 seed 至 8；
+   walker easy seed 7-9 跑完让 Fisher 检验收口。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
