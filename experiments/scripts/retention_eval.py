@@ -63,11 +63,35 @@ STAGE1_CKPT = (PROJECT_ROOT / "hippoact" / "outputs"
                / "stage1_seed{seed}" / "ckpt_final.pt")
 
 
+def obs_overrides(exp):
+    """The hydra overrides that reconstruct the observation this run trained on.
+
+    Getting this wrong is silent: every arm loads without error, it just gets
+    evaluated under the wrong observation.  Keyed off exp_name, which is the
+    only thing that distinguishes the arms.
+
+        e2e0_sN      slots + proprio   (the confounded arm, kept as evidence)
+        e2e0vis_sN   slots only        (Q2 protocol: locomotion is vision-only)
+        proprio_only 24-d proprio      (distraction-immune by construction)
+        anything else                  the pixel baseline
+    """
+    m = re.match(r"^e2e0(vis)?_s(\d+)$", exp)
+    if m:
+        ckpt = str(STAGE1_CKPT).format(seed=m.group(2))
+        return ["obs=state", f"hippoact_precompute={ckpt}",
+                "hippoact_slot_init_seed=0",
+                f"hippoact_include_proprio={'false' if m.group(1) else 'true'}"]
+    if exp == "proprio_only":
+        return ["obs=state"]
+    return ["obs=rgb"]
+
+
 def find_checkpoints(exp_name):
     """`exp_name` matches exactly, or as a prefix (e2e0 -> e2e0_s1, e2e0_s3...).
 
     The prefix form is how the E2E-0 family is addressed: one exp_name per
-    Stage-1 encoder, all evaluated on the same grid.
+    Stage-1 encoder, all evaluated on the same grid.  Note `e2e0` does *not*
+    pick up `e2e0vis_s1` -- they are separate arms and separate `--exp` values.
     """
     out = []
     for ckpt in sorted(LOG_ROOT.glob("*/*/*/models/final.pt")):
@@ -76,13 +100,8 @@ def find_checkpoints(exp_name):
             continue
         seed = int(ckpt.parent.parent.parent.name)
         task = ckpt.parent.parent.parent.parent.name
-        rec = dict(train_task=task, seed=seed, exp_name=exp, ckpt=str(ckpt))
-        # E2E-0 checkpoints need the frozen Stage-1 encoder in the env, and the
-        # Stage-1 seed is encoded in the exp_name suffix (e2e0_s3 -> seed 3).
-        m = re.search(r"^e2e0_s(\d+)$", exp)
-        if m:
-            rec["hippoact_ckpt"] = str(STAGE1_CKPT).format(seed=m.group(1))
-        out.append(rec)
+        out.append(dict(train_task=task, seed=seed, exp_name=exp,
+                        ckpt=str(ckpt), obs=obs_overrides(exp)))
     return out
 
 
@@ -98,13 +117,9 @@ def run_one(job, episodes, gpu):
         f"checkpoint={job['ckpt']}",
         f"hydra.run.dir={LOG_ROOT / 'hydra_retention' / tag}",
     ]
-    if job.get("hippoact_ckpt"):
-        # E2E-0: TD-MPC2 sees a plain state vector; the frozen encoder lives in
-        # the env. slot_init_seed is part of the encoder's identity (§R4.6.4).
-        cmd[4:4] = ["obs=state", f"hippoact_precompute={job['hippoact_ckpt']}",
-                    "hippoact_slot_init_seed=0"]
-    else:
-        cmd.insert(4, "obs=rgb")
+    # E2E-0 arms: TD-MPC2 sees a plain state vector; the frozen encoder lives in
+    # the env. slot_init_seed is part of the encoder's identity (§R4.6.4).
+    cmd[4:4] = job["obs"]
     t0 = time.time()
     proc = subprocess.run(cmd, cwd=str(LAUNCH_DIR), env=env,
                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
