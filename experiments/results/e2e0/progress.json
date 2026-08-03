@@ -1,0 +1,37 @@
+{
+  "e2e0_s1": {
+    "arm": "e2e0",
+    "last_reward": 968.5,
+    "reached_step": 350000
+  },
+  "e2e0_s3": {
+    "arm": "e2e0",
+    "last_reward": 972.6,
+    "reached_step": 350000
+  },
+  "e2e0_s5": {
+    "arm": "e2e0",
+    "last_reward": 973.1,
+    "reached_step": 350000
+  },
+  "e2e0vis_s1": {
+    "arm": "e2e0vis",
+    "last_reward": 27.2,
+    "reached_step": 0
+  },
+  "e2e0vis_s3": {
+    "arm": "e2e0vis",
+    "last_reward": 25.6,
+    "reached_step": 0
+  },
+  "e2e0vis_s5": {
+    "arm": "e2e0vis",
+    "last_reward": 26.6,
+    "reached_step": 0
+  },
+  "proprio_only": {
+    "arm": "proprio_only",
+    "last_reward": 24.9,
+    "reached_step": 0
+  }
+}

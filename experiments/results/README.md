@@ -16,6 +16,7 @@
 | `summary.csv` | 每个 run 一行，关键 checkpoint + final_ckpt_30ep（不含重跑） |
 | `table_v.md` | 渲染好的 Table V / 官方对照 / 判据裁决 |
 | `retention_eval.json` / `retention.md` | **R1 Q2 零样本网格**：12 ckpt × {none, easy, hard} × 30 ep |
+| `e2e0/` | **W2.1 E2E-0 三臂**（slots+proprio / slots only / proprio only）+ proprio 混淆说明，见该目录 README |
 | `stage1/criterion_by_step.csv` | Stage-1 重训的判据随步数走势（证明加训无用） |
 | `stage1/stage1_dcs.yaml` | Stage-1 重训用的配方 |
 | `stage1/slots_*.png` | slot alpha 叠加图 |
