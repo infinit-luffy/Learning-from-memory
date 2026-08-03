@@ -1,0 +1,15 @@
+# W2.1 E2E-0 — walker-walk easy，三个 Stage-1 encoder 并行。
+#
+# ckpt 选择规则事先声明：取 Stage-1 seed 1 / 3 / 5，覆盖 5-seed 富集度分布的
+# 低-中-高段（3.47 / 4.00 / 3.42），**不按判据挑**。
+#
+# **RL seed 全部固定为 1**，唯一变量就是 encoder —— 否则 encoder seed 与 RL
+# seed 一起变，结果无法归因。exp_name 的 _sN 后缀记录用的是哪个 Stage-1 seed。
+#
+# 快路径：obs=state + hippoact_precompute，TD-MPC2 本体一行不改（见 R4.6）。
+# runner=e2e0 从 exp_name 的 _sN 后缀推出 ckpt 路径。
+#
+# task                     seed  steps   exp_name
+dcs-easy-walker-walk         1  500000  e2e0_s1
+dcs-easy-walker-walk         1  500000  e2e0_s3
+dcs-easy-walker-walk         1  500000  e2e0_s5

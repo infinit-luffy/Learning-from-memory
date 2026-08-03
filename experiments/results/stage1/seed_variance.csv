@@ -1,0 +1,11 @@
+seed,split,fast_enrichment,cohens_d
+1,clean,3.47,1.157
+1,easy,3.57,1.320
+2,clean,4.06,1.970
+2,easy,4.19,1.653
+3,clean,4.00,1.898
+3,easy,4.07,1.512
+4,clean,3.87,1.818
+4,easy,3.87,1.470
+5,clean,3.42,1.588
+5,easy,3.66,1.364

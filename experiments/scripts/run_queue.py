@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import csv
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -122,7 +123,36 @@ def release(job):
         pass
 
 
+STAGE1_CKPT = (PROJECT_ROOT / "hippoact" / "outputs"
+               / "stage1_seed{seed}" / "ckpt_final.pt")
+
+
 def build_cmd(job, gpu):
+    if job.get("runner") == "e2e0":
+        # W2.1 E2E-0 fast path: the frozen encoder lives in the env, so
+        # TD-MPC2 runs with plain `obs=state` and no modification at all.
+        # The Stage-1 seed comes from the exp_name suffix (e2e0_s3 -> seed 3)
+        # so the job file stays one line per run.
+        m = re.search(r"_s(\d+)$", job["exp_name"])
+        assert m, f"e2e0 exp_name must end in _s<stage1 seed>: {job['exp_name']}"
+        ckpt = str(STAGE1_CKPT).format(seed=m.group(1))
+        assert Path(ckpt).exists(), f"missing Stage-1 checkpoint {ckpt}"
+        hydra_dir = LAUNCH_DIR / "logs" / "hydra" / f"{job['task']}_s{job['seed']}_{job['exp_name']}"
+        return [
+            PYTHON, str(TRAIN_PY),
+            f"task={job['task']}",
+            "obs=state",
+            f"hippoact_precompute={ckpt}",
+            "model_size=5",
+            f"steps={job['steps']}",
+            f"seed={job['seed']}",
+            f"exp_name={job['exp_name']}",
+            "enable_wandb=false",
+            "save_video=false",
+            "save_agent=true",
+            "eval_freq=25000",
+            f"hydra.run.dir={hydra_dir}",
+        ]
     if job.get("runner") == "drqv2":
         # `steps` is agent steps for both runners; DrQ-v2 counts frames.
         task, distraction = job["task"].rsplit("__", 1)
@@ -161,7 +191,7 @@ def build_cmd(job, gpu):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", required=True)
-    ap.add_argument("--runner", default="tdmpc2", choices=["tdmpc2", "drqv2"],
+    ap.add_argument("--runner", default="tdmpc2", choices=["tdmpc2", "drqv2", "e2e0"],
                     help="drqv2 job task field is '<domain>_<task>__<distraction>'")
     ap.add_argument("--gpus", default="0,1")
     ap.add_argument("--slots-per-gpu", type=int, default=3)
