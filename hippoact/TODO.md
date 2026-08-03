@@ -120,6 +120,34 @@ E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
 5. **低优先级队列**（卡空时）：cheetah clean 补 seed 至 8；
    walker easy seed 7-9 跑完让 Fisher 检验收口。
 
+## ⚡ R4.8 / R3.3 拍板（2026-08-04，cowork）—— proprio 分场景协议
+
+**架构澄清（本轮核心）**：proprio 通道的正当性取决于任务类型——
+- **Locomotion (DCS)**：proprio = 全状态 → **作弊**。Q2 全部方法纯视觉
+  （含我们，`hippoact_include_proprio=false`）。这是 DCS 文献标准做法。
+- **Manipulation (Meta-World)**：proprio 只含手臂，物体位置必须从视觉读
+  → **正当**。两边都给 vision+proprio，公平。binding transformer +
+  proprio 融合在这里才被正当检验。
+
+**因此 Meta-World 从"点缀"升级为完整方法的主战场**（Week 4 权重上调）。
+
+执行队列：
+1. `e2e0vis_s{1,3,5}` + `proprio_only` 跑完（在跑）→ 判据对照
+   （预注册 pixel 同点位判据沿用；带 proprio 的三个 run 达标作废，
+   保留作混淆证据）
+2. e2e0vis 过判据 → 三个 500K ckpt 的 {none,easy,hard} invariance 评测
+   （flat-invariance 预测，预注册目标不变）
+3. proprio_only 数字进论文作 context row（大多数 DCS 研究不报这个，
+   报了是加分）
+4. cheetah 的 E2E 同样走纯视觉协议
+5. **Meta-World 准备工作提前启动**（与 DCS 收尾并行）：
+   MW 视觉版环境调研（obs 里物体位姿必须不可见）、Stage-1 on MW 帧采集
+   计划、TD-MPC2 的 MW 配置确认。先出一页 spec 再动手。
+
+**R3.3 采纳**：DrQ-v2 clean 失败 = 官方已知性质（其曲线 2/10 同形），
+官方 10-seed 并入基线后干扰效应显著（25%→78%, Fisher p=0.016）。
+论文引官方曲线，无需排查清单。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
