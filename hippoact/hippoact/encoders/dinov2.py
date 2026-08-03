@@ -73,12 +73,22 @@ class DinoV2Encoder(nn.Module):
         else:
             try:
                 self._backbone = torch.hub.load(
-                    "facebookresearch/dinov2", model_name, verbose=False
+                    "facebookresearch/dinov2", model_name, verbose=False,
+                    # Use the cached clone when the network hiccups. Without
+                    # this a transient "Remote end closed connection" silently
+                    # swaps in a random frozen CNN and everything downstream —
+                    # training, evaluation, E2E returns — is quietly meaningless.
+                    trust_repo=True, skip_validation=True,
                 )
                 self._backbone.eval()
                 for p in self._backbone.parameters():
                     p.requires_grad = False
             except Exception as e:  # noqa: BLE001
+                if os.environ.get("HIPPOACT_STRICT_DINO", "0") == "1":
+                    raise RuntimeError(
+                        f"DINOv2 '{model_name}' could not be loaded ({e}). "
+                        "HIPPOACT_STRICT_DINO=1 forbids the mock fallback."
+                    ) from e
                 print(f"[HippoAct] Falling back to MockDinoV2Encoder ({e}).")
                 self._install_mock()
 

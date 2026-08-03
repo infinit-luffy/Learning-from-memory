@@ -1,3 +1,73 @@
+diff --git a/tdmpc2/common/world_model.py b/tdmpc2/common/world_model.py
+index 3e36c36..455f802 100644
+--- a/tdmpc2/common/world_model.py
++++ b/tdmpc2/common/world_model.py
+@@ -22,7 +22,29 @@ class WorldModel(nn.Module):
+ 			self.register_buffer("_action_masks", torch.zeros(len(cfg.tasks), cfg.action_dim))
+ 			for i in range(len(cfg.tasks)):
+ 				self._action_masks[i, :cfg.action_dims[i]] = 1.
+-		self._encoder = layers.enc(cfg)
++		if cfg.get('encoder_type', 'default') == 'hippoact':
++			# W2.1 E2E-0: swap the encoder, nothing else. See PHASE2_PLAN §3.1 —
++			# the whole point of the comparison is that TD-MPC2's algorithm is
++			# untouched. `_encoder` is a plain Module here, not the per-modality
++			# ModuleDict, so `encode()` dispatches on encoder_type too.
++			import os as _os, sys as _sys
++			_root = _os.path.abspath(_os.path.join(
++				_os.path.dirname(__file__), _os.pardir, _os.pardir, _os.pardir, _os.pardir))
++			# The importable package is the INNER hippoact/hippoact — its
++			# __init__ does `from hippoact.encoders...`, so hippoact/ must be
++			# the sys.path entry, not the repo root.
++			for _p in (_os.path.join(_root, 'hippoact'), _root):
++				if _p not in _sys.path:
++					_sys.path.insert(0, _p)
++			from hippoact.adapters.tdmpc2_adapter import HippoActAdapter, AdapterConfig
++			self._encoder = HippoActAdapter(AdapterConfig(
++				stage1_ckpt=cfg.hippoact_ckpt,
++				proprio_dim=int(cfg.obs_shape['state'][0]),
++				latent_dim=cfg.latent_dim,
++				finetune_encoder=bool(cfg.get('hippoact_finetune', False)),
++			))
++		else:
++			self._encoder = layers.enc(cfg)
+ 		self._dynamics = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], cfg.latent_dim, act=layers.SimNorm(cfg))
+ 		self._reward = layers.mlp(cfg.latent_dim + cfg.action_dim + cfg.task_dim, 2*[cfg.mlp_dim], max(cfg.num_bins, 1))
+ 		self._termination = layers.mlp(cfg.latent_dim + cfg.task_dim, 2*[cfg.mlp_dim], 1) if cfg.episodic else None
+@@ -107,6 +129,18 @@ class WorldModel(nn.Module):
+ 		"""
+ 		if self.cfg.multitask:
+ 			obs = self.task_emb(obs, task)
++		if self.cfg.get('encoder_type', 'default') == 'hippoact':
++			# obs is a dict/TensorDict {"rgb", "state"}. During `update()` it
++			# arrives as (T, B, ...) — encode each timestep, same as the rgb
++			# path above does.
++			if obs['rgb'].ndim == 5:
++				# Index the time axis explicitly: iterating a plain dict yields
++				# its keys, and we get plain dicts as well as TensorDicts here.
++				return torch.stack([
++					self._encoder({k: v[t] for k, v in obs.items()})
++					for t in range(obs['rgb'].shape[0])
++				])
++			return self._encoder(obs)
+ 		if self.cfg.obs == 'rgb' and obs.ndim == 5:
+ 			return torch.stack([self._encoder[self.cfg.obs](o) for o in obs])
+ 		return self._encoder[self.cfg.obs](obs)
+diff --git a/tdmpc2/config.yaml b/tdmpc2/config.yaml
+index ff15dbb..dc95a49 100755
+--- a/tdmpc2/config.yaml
++++ b/tdmpc2/config.yaml
+@@ -4,6 +4,11 @@ defaults:
+ # environment
+ task: dog-run
+ obs: state
++# W2.1 E2E-0: swap the encoder only (PHASE2_PLAN §3.1). `default` is the
++# stock TD-MPC2 path and is what every baseline run uses.
++encoder_type: default        # default | hippoact
++hippoact_ckpt: ''            # Stage-1 checkpoint; required when encoder_type=hippoact
++hippoact_finetune: false     # E2E-0 keeps Stage-1 modules frozen
+ episodic: false
+ 
+ # evaluation
 diff --git a/tdmpc2/envs/__init__.py b/tdmpc2/envs/__init__.py
 index 46f99a8..940572c 100644
 --- a/tdmpc2/envs/__init__.py

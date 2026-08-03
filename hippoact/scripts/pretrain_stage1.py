@@ -152,6 +152,11 @@ def main():
                     help="For clip loader: frame gap between (prev, cur)")
     ap.add_argument("--seed", type=int, default=None,
                     help="Override train.seed; use for Stage-1 variance sweeps")
+    ap.add_argument("--out-dir", type=str, default=None,
+                    help="Override log.out_dir/stage1. REQUIRED when running "
+                         "several Stage-1 jobs at once: they otherwise all write "
+                         "checkpoints into the same directory and overwrite each "
+                         "other's ckpt_step*.pt.")
     ap.add_argument("--viz-every", type=int, default=None,
                     help="Override log.viz_every from config")
     args = ap.parse_args()
@@ -215,7 +220,7 @@ def main():
         slow_variant=str(cfg.loss.get("slow_variant", "soft_bce")),
         slow_temperature=float(cfg.loss.get("slow_temperature", 1.0)),
         slot_init_mode=str(cfg.train.get("slot_init_mode", "shared")),
-        out_dir=cfg.log.out_dir + "/stage1",
+        out_dir=args.out_dir or (cfg.log.out_dir + "/stage1"),
         device=cfg.train.device,
         use_wandb=args.wandb,
         wandb_project=cfg.log.wandb_project,

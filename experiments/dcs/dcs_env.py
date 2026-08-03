@@ -99,7 +99,14 @@ def make_dm_env(difficulty, domain, subtask, seed, dynamic=True):
 
 
 def make_env(cfg):
-    """TD-MPC2 entry point. Raises ValueError for non-DCS tasks."""
+    """TD-MPC2 entry point. Raises ValueError for non-DCS tasks.
+
+    `cfg.obs`:
+      state    — dm_control's proprio vector (TD-MPC2 default)
+      rgb      — 3x64x64 frame stack (the official pixel baseline)
+      hippoact — {"rgb": 3x224x224 uint8, "state": proprio} for the HippoAct
+                 encoder; see experiments/dcs/hippoact_obs.py
+    """
     # Imported lazily/relatively: these live on TD-MPC2's sys.path, which is
     # only set up once tdmpc2/train.py is the running program.
     from dm_control.suite.wrappers import action_scale
@@ -107,12 +114,16 @@ def make_env(cfg):
     from envs.wrappers.timeout import Timeout
 
     difficulty, domain, subtask = parse_task(cfg.task)
-    assert cfg.obs in {"state", "rgb"}, "DCS only supports state and rgb observations."
+    assert cfg.obs in {"state", "rgb", "hippoact"}, \
+        f"DCS supports obs in {{state, rgb, hippoact}}, got {cfg.obs!r}"
 
     env = make_dm_env(difficulty, domain, subtask, cfg.seed)
     env = action_scale.Wrapper(env, minimum=-1.0, maximum=1.0)
     env = DMControlWrapper(env, domain)
     if cfg.obs == "rgb":
         env = Pixels(env, cfg)
+    elif cfg.obs == "hippoact":
+        from experiments.dcs.hippoact_obs import HippoActObs
+        env = HippoActObs(env, size=int(cfg.get("hippoact_image_size", 224)))
     env = Timeout(env, max_episode_steps=500)
     return env

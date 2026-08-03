@@ -38,14 +38,18 @@ print(f"[var] DINOv2 backbone OK: {type(inner).__name__}")
 PYEOF
 
 echo "[var] seed=$SEED gpu=$GPU -> $OUT   $(date)"
+# --out-dir per seed. The first version of this script let every seed write to
+# the shared `outputs/stage1` and renamed it afterwards; with seeds running
+# concurrently the first one to finish moved the directory out from under the
+# others (seed 3 died at step 25000 with "Parent directory does not exist",
+# and the intermediate ckpt_step*.pt of the survivors were cross-overwritten).
 $PY scripts/pretrain_stage1.py \
     --config configs/stage1_dcs.yaml \
     --data-dir "$DATA/train_both" \
     --seed "$SEED" \
+    --out-dir "$OUT" \
     --num-workers 8 2>&1 | sed "s/^/[s$SEED] /"
 
-# pretrain writes to <log.out_dir>/stage1; move it aside so seeds do not clash
-mv outputs/stage1 "$OUT"
 echo "[var] training done, checkpoints in $OUT   $(date)"
 
 CKPT="$OUT/ckpt_final.pt"

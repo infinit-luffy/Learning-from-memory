@@ -1469,3 +1469,82 @@ Stage-1 09:42 训完（rc=0），紧接着的判据检查立刻崩在
 **教训**：链式脚本里每一个下游步骤，都要先用**真实调用方式**单独跑通一次
 再挂进链子。用交互式 `python -c` 验证不算数。
 
+---
+
+# R4.5 E2E-0 集成完成 —— 但实测吞吐说明这条路按现状跑不通
+
+三件集成全部完成，`experiments/scripts/smoke_e2e0.py` 全过。
+**然后测吞吐，发现 500K 步要 22.6 天。** 集成是对的，代价不可接受。
+
+## R4.5.1 三件集成（全过）
+
+| 检查 | 结果 |
+|---|---|
+| env 契约：`obs=hippoact` | `rgb (3,224,224) uint8` + `state (24,) float32`；`cfg.obs_shape` 正确 |
+| 物理未被改动 | 与 pixel 臂同 seed 同动作序列，max\|Δreward\| = **0.000e+00** |
+| encoder 接线 | 架构从 ckpt 的 `encoder_arch` 快照读出（16 slots / 128 dim / 224），Stage-1 模块冻结 |
+| `encode` 形状 | `(B,…) → (1,512)`、`(T,B,…) → (4,1,512)` |
+| **MPPI 调用次数** | 3 次 `act()` → encoder **恰好 3 次**（若在 planning 内重编码会是 512×3） |
+
+fork 改动仍然很小：4 文件 +62 −2，**算法零改动**。
+
+## R4.5.2 三个集成期发现的真问题
+
+**(1) TD-MPC2 单任务路径从未走过 dict 观测。** `act()` 调 `obs.to().unsqueeze(0)`，
+`update()` 索引时间轴——普通 dict 两样都没有。改为 wrapper 直接产出 **TensorDict**
+（replay buffer 本来就是 TensorDict 的），全链路即通。
+
+**(2) DINOv2 会静默降级成随机 CNN。** 集成过程中真的触发了一次：
+`Falling back to MockDinoV2Encoder (Remote end closed connection without response)`
+——一次网络抖动，backbone 就被换成随机权重，训练照跑、数字全废。
+只是碰巧被 ckpt 权重不匹配的 assert 拦住，那是运气不是设计。已修三处：
+`torch.hub.load(..., trust_repo=True, skip_validation=True)` 用本地缓存、
+`HIPPOACT_STRICT_DINO=1` 禁止回退、adapter 里硬断言（显式 `HIPPOACT_FORCE_MOCK=1`
+仍放行，要防的是**静默**回退而非离线测试）。
+
+**(3) `encode_frame` 无条件跑 slot decoder，而 RL 侧根本不用它。**
+router 只吃 slot 向量；decoder 产出的 `recon`/`alpha` 只有 Stage-1 的重建与
+连通性损失需要。而它会物化 `(B,K,N,D_v)`——B=1024 时 **6 GB**，直接 OOM。
+加 `decode=False` 后 OOM 消失、单步 5.4 s → 3.9 s。**这是精确的，不是近似**。
+
+## R4.5.3 吞吐实测：瓶颈是 update()，占 99.6%
+
+`experiments/scripts/bench_e2e0.py`（gpu1，与 3 个 DrQ-v2 共卡，故偏悲观）：
+
+```
+act():    1 帧                 14.6 ms   (  69 帧/s)
+update(): 256 帧             1008.4 ms   ( 254 帧/s)
+update(): 1024 帧 (4×256)    3882.3 ms   ( 264 帧/s)
+
+每个 env step = act(1) + update(1024) = 3897 ms  ->  0.26 SPS
+500K 步 = 541 h = 22.6 天
+```
+
+原因是结构性的：TD-MPC2 每个 env step 做 1 次 update，而一次 update 要把
+`(horizon+1) × batch = 4 × 256 = 1024` 帧 224² 过一遍 DINOv2。
+**pixel baseline 的 encoder 是个小 CNN，HippoAct 是 ViT-S** ——
+同样的 1024 帧，前者微秒级，后者近 4 秒。
+
+## R4.5.4 解法：缓存 slots（**精确**，非近似）
+
+E2E-0 的 Stage-1 编码器是**冻结**的，因此某一帧的 slots 永不改变：
+**在入 buffer 时编码一次，与在采样时编码，数学上完全等价。**
+
+| | 现状 | 缓存 slots |
+|---|---|---|
+| 每步 DINOv2 前向 | 1024 帧 | **1 帧** |
+| 预计 SPS | 0.26 | **~69**（被 act() 卡住） |
+| 500K 步 | **22.6 天** | **~2 小时** |
+| buffer/帧 | 147 KB（uint8 图） | **8 KB**（16×128 float） |
+| buffer @500K | 75 GB | **4 GB** |
+
+**限制**：仅当编码器冻结时成立。E2E-1/E2E-2 若要微调 slot attention 就不能用
+（缓存 DINOv2 patch 特征不可行：256×384 fp16 = 197 KB/帧，比存原图还大）。
+届时要么冻结 slot attention，要么接受慢速。
+
+**这需要 cowork 拍板**，因为它不再是"只换 encoder"——buffer 里存的东西变了。
+其余选项都更差：减 batch（改 TD-MPC2 超参，破坏"算法零改动"）、
+降分辨率（DINOv2/14 需要 224，Stage-1 得重训）、减步数（削弱对比）。
+
+**在拍板前 E2E-0 不起跑**——用现状跑等于烧 22 天换一个本可 2 小时得到的相同结果。
+

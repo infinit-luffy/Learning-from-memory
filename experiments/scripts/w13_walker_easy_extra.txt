@@ -1,0 +1,14 @@
+# W1.3 第二轮补种 — 只补 walker_walk easy，把显著性做出来（或做掉）。
+#
+# 现状：clean 4/6 学会（940 mean），easy 1/6 学会（870）。方向清楚但
+# Fisher 单侧 p = 0.121，**不显著** —— 6 个 seed 分不开。
+# （第一轮我按 easy 0/5 报过 p=0.046，第 6 个 seed 学会后该数已作废。）
+#
+# clean 臂的失败率已有 6 个点估到 2/6，再加成本高收益低；
+# 加 easy 臂到 9 个点即可：若 3 个都失败 → 4/6 vs 1/9，p = 0.047。
+# 若其中有学会的，则结论反过来 —— 那也是答案。
+#
+# task                     seed  steps   exp_name
+walker_walk__easy            7  500000  w13_drqv2
+walker_walk__easy            8  500000  w13_drqv2
+walker_walk__easy            9  500000  w13_drqv2

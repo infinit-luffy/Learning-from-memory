@@ -90,11 +90,22 @@ class HippoActEncoder(nn.Module):
 
     # ---- Per-frame API -------------------------------------------------
 
-    def encode_frame(self, img: torch.Tensor) -> EncoderOutput:
-        """Encode a single frame. img: (B, 3, H, W)."""
+    def encode_frame(self, img: torch.Tensor, decode: bool = True) -> EncoderOutput:
+        """Encode a single frame. img: (B, 3, H, W).
+
+        `decode=False` skips the slot decoder. Stage-1 needs `recon`/`alpha`
+        for its reconstruction and connectivity losses; downstream RL does not
+        — the router reads slot vectors only. The decoder is not a minor
+        addition: it materialises (B, K, N, D_v), i.e. 6 GB at B=1024, and
+        dominates the per-batch cost. Skipping it is exact, not an
+        approximation, whenever the caller ignores recon/alpha.
+        """
         feats = self.dino(img)                              # (B, N, D_v)
         slots = self.slot_attn(feats)                       # (B, K, D_s)
-        recon, alpha = self.slot_decoder(slots)             # (B, N, D_v), (B, K, N)
+        if decode:
+            recon, alpha = self.slot_decoder(slots)         # (B, N, D_v), (B, K, N)
+        else:
+            recon, alpha = None, None
         g, logits = self.router(slots)                      # g: (B, K, 2)
         fast_mask = g[..., 1]                               # (B, K)  0/1
         fast_slots = slots * fast_mask.unsqueeze(-1)
