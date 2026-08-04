@@ -1890,3 +1890,124 @@ SlotFeatureExtractor 前向 (b=1)   4.71 ms
 每个进程恰好占满 1 个核，机器有 64 核。
 
 → 单个 run 快不了，但可以并发。已从 3 个并发提到 7 个，四张卡都在用。
+
+---
+
+# R4.9 E2E-0 三臂全部跑完 —— **判据不通过，且根因写在我们自己的代码注释里**
+
+7 个 run × 500K agent step 全部完成（2026-08-04 09:46）。
+数据在 `experiments/results/e2e0/`，`export_e2e0.py` 可重生成。
+
+## R4.9.1 结果
+
+`dcs-easy-walker-walk`，RL seed 均为 1，三臂只差观测：
+
+| agent step | slots+proprio (n=3) | **slots only (n=3)** | proprio only (n=1) | pixel 基线 (n=3) | 判据 |
+|---:|---:|---:|---:|---:|---:|
+| 50K | 559.9 | **121.3** | 953.0 | 213.8 | 171 |
+| 100K | 925.2 | **122.1** | 969.7 | 391.4 | 313 |
+| 200K | 968.4 | **224.7** | 976.7 | 572.2 | 458 |
+| 250K | 976.1 | **225.1** | 979.5 | 675.5 | 540 |
+| 500K | 972.7 | **305.5** | 974.3 | **878.7** | — |
+
+三个结论，一个比一个重：
+
+1. **proprio 混淆被我们自己的对照钉死**（不再需要引官方数字）：
+   `proprio_only` = 974.3，`slots+proprio` = 972.7。**差 1.6 分。**
+   2048 维 slot 特征的边际贡献在测量噪声内。§R4.8 的判断成立。
+   而且 proprio_only 在 **50K 就到 953** —— walker-walk 对纯本体感受近乎平凡。
+
+2. **纯视觉 E2E-0 判据全线不通过。** 500K 时 305.5 / 878.7 = **0.35×**，
+   判据是 ≥0.8×。四个预注册点位全部不过（121/171、122/313、225/458、225/540）。
+
+3. **冻结的 slot 表征显著劣于原始像素**（305 vs 879）。
+   这不是"没有增益"，是**倒退 2.9 倍**。
+
+## R4.9.2 根因：`shared` 模式的 slot 跨帧不跟踪物体，而 E2E-0 的 flatten 要求它跟踪
+
+ckpt 的 `trainer_config` 实读：**`slot_init_mode = shared`**。
+
+`hippoact/training/stage1.py:160` 自己的注释：
+
+> CP5c fix: pair-wide shared init eliminates noise floor but **freezes the
+> spatial partition — slots do NOT track objects across frames** (CP5d
+> finding: alpha centroid moves 0.4 patch while objects move 2.3 patch).
+
+同文件 `:215`，训练时算 slow loss 前先做**最近邻匹配**：
+
+```python
+prev_for_slow = match_slots_nn(slots.detach(), slots_prev.detach())
+```
+
+—— 这行代码存在本身就是证据：`shared` 模式下 **slot 下标跨帧没有对应关系**，
+所以损失函数必须先匹配再比较。
+
+**而 E2E-0 的契约 `z = MLP(flatten(S_fg) ⊕ q)` 是按固定下标拼接的，
+对置换敏感。** 训练目标做到了置换容忍，下游消费方要求置换稳定 ——
+两者不兼容。这不是调参问题，是接口不匹配。
+
+## R4.9.3 独立实测（`experiments/scripts/diag_slot_features.py`）
+
+不靠注释，自己在 300 步真实 rollout 上量了一遍
+（`experiments/results/e2e0/slot_feature_diagnosis.json`）：
+
+| 量 | 实测 | 含义 |
+|---|---|---|
+| `same_slot_is_nearest` | **0.490** | 只有一半的 slot 在下一帧仍是自己的最近邻 —— **slot 一直在置换** |
+| `corr(Δobs, Δproprio)` | **0.035** | 观测的变化量与物理状态的变化量**几乎零相关** |
+| `corr(Δ未门控 slots, Δproprio)` | 0.077 | 去掉门控也一样，**问题在 slot 本身不在路由** |
+| gate 每步翻转的 slot 数 | 3.64 / 16 | |
+| 每步归零或复活的维度 | **465 / 2048** | 23% 的观测维度每一步跳变 |
+| 有翻转的帧占比 | 98.7% | |
+| `obs_delta_mean` | 62.2 | 而单个 slot 的模长只有 20.6 —— **每步变化是 slot 自身尺度的 3 倍** |
+
+关键的一条是 `corr(Δobs, Δproprio) = 0.035`。TD-MPC2 的全部机制建立在
+**能从 (z_t, a_t) 预测 z_{t+1}** 之上（consistency loss + MPPI 在 latent 里 rollout）。
+观测变化与状态变化不相关，等于 world model 的学习目标本身不可学，
+MPPI 在一个无意义的空间里规划。**305 分这个数字是可解释的**：
+策略从边际统计量里学到了一点东西，但世界模型是废的。
+
+门控翻转（465 维/步）曾是我的首要嫌疑，但 `obs_delta` 在翻转帧(62.2)与
+非翻转帧(56.9)几乎一样，且去掉门控后相关性仍是 0.077 ——
+**门控不是主因，slot 本身的时间不连续才是。** 记录下来避免后人重查。
+
+## R4.9.4 一个重要推论：这个失败模式**可能只打 E2E-0**
+
+`flatten` 是 E2E-0 独有的读出方式。E2E-1 的 binding transformer 用注意力
+处理 slot 集合，**对置换等变**，原理上免疫本失败模式。
+
+所以 build-up ablation 的第一级可能恰好是最差的一级。
+**不能从 E2E-0 失败推出方法失败。**
+
+## R4.9.5 三条候选路线（未选，需 cowork 拍板）
+
+| | 做法 | 成本 | 风险 |
+|---|---|---|---|
+| A | Stage-1 换 `carryover_norm` 重训（该模式存在的目的正是保住 slot 身份，见 `stage1.py:184` CP5g 注释） | **8.4 h/seed**（实测）× 3 + E2E 重跑 5.5h×3 | 假设未验证：carryover_norm 能否真的把 `same_slot_is_nearest` 推高，需先在 100 帧上量一次再决定要不要训 |
+| B | 读出改成置换不变（对 slot 求和/池化，或按 canonical key 排序） | 零训练，改 adapter | 改了 E2E-0 契约；池化会丢掉 binding transformer 要用的结构 |
+| C | 直接跳到 E2E-1（binding transformer 天然置换等变） | 5.5h×3 | 跳过 build-up ablation 的一级，A5 行会缺 |
+
+**我的建议：先做 A 的前置测量**（零 GPU 训练成本）——
+拿现有 ckpt 用 `carryover_norm` 的推理方式（上一帧输出当下一帧 init）
+重跑 `diag_slot_features.py`，看 `same_slot_is_nearest` 是否显著上升。
+上升 → 走 A 有依据；不上升 → 直接走 C。
+
+## R4.9.6 顺带修掉一个真 bug：`retention_eval.py` 把 HippoAct 臂路由错了
+
+链式 Q2 评测（`chain_e2e0_q2.sh`）在 `difficulty=none` 上崩了：
+
+```
+size mismatch for _encoder.state.0.weight:
+  ckpt torch.Size([256, 2072]) vs model torch.Size([256, 24])
+```
+
+原因：`eval_task_name(base, "none")` 返回裸 `walker-walk`，走的是 **TD-MPC2
+自己的 `envs/dmcontrol.py`**，那条路根本不看 `hippoact_precompute` ——
+wrapper 被静默丢掉，agent 拿到的是裸 24 维 proprio。
+
+**这次是因为编码器宽度恰好不同才炸出来的**，不是因为有检查。
+若两者宽度相同，它会安静地跑完并给出一个错误的数。
+
+修法：HippoAct 臂一律走 `dcs-none-*`（`dcs_env.py` 在 `difficulty=none`
+时直接调 `dm_control.suite.load`，与裸名字是同一个环境）。
+pixel 基线保持走裸名字不变（与官方逐位一致）。

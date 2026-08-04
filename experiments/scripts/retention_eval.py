@@ -53,10 +53,24 @@ def base_task(task):
     return task[len("dcs-easy-"):] if task.startswith("dcs-easy-") else task
 
 
-def eval_task_name(base, difficulty):
-    # `none` goes through TD-MPC2's own dm_control path, bit-identical to
-    # the official baseline (verified in smoke_env.py).
-    return base if difficulty == "none" else f"dcs-{difficulty}-{base}"
+def eval_task_name(base, difficulty, needs_dcs_env=False):
+    """`walker-walk`+`hard` -> `dcs-hard-walker-walk`.
+
+    For the pixel baseline, `none` is deliberately routed to TD-MPC2's own
+    dm_control path (bit-identical to the official baseline, verified in
+    smoke_env.py).  The HippoAct arms must NOT take that route: TD-MPC2's own
+    `make_env` never sees `hippoact_precompute`, so the wrapper is silently
+    dropped and the agent is handed a raw 24-d proprio vector.  That surfaces
+    as a state_dict shape mismatch (2072 vs 24) rather than a wrong number, but
+    only because the encoder width happens to differ -- do not rely on that.
+
+    `experiments/dcs/dcs_env.py` handles `difficulty=none` by calling
+    `dm_control.suite.load` directly, so `dcs-none-<task>` is the same
+    environment as the bare name.
+    """
+    if difficulty == "none" and not needs_dcs_env:
+        return base
+    return f"dcs-{difficulty}-{base}"
 
 
 STAGE1_CKPT = (PROJECT_ROOT / "hippoact" / "outputs"
@@ -193,7 +207,9 @@ def main():
             if key in cache and cache[key].get("episodes") == args.episodes:
                 continue
             jobs.append(dict(c, difficulty=d, key=key,
-                             eval_task=eval_task_name(base_task(c["train_task"]), d)))
+                             eval_task=eval_task_name(
+                                 base_task(c["train_task"]), d,
+                                 needs_dcs_env=c["obs"] != ["obs=rgb"])))
 
     print(f"{len(ckpts)} checkpoints x {len(difficulties)} difficulties; "
           f"{len(jobs)} to evaluate ({len(ckpts)*len(difficulties)-len(jobs)} cached)")

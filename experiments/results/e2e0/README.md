@@ -14,9 +14,49 @@
 
 完整推导见 `hippoact/TODO_RESULT.md` §R4.6–§R4.8。
 
-## 这批数据要说的一件事
+## 最终结果（2026-08-04，7 个 run 全部 500K 完成）
 
-**`e2e0_s*`（带 proprio）那三条曲线不能读作 HippoAct 赢。**
+| agent step | slots+proprio (n=3) | **slots only (n=3)** | proprio only (n=1) | pixel 基线 (n=3) | 判据 |
+|---:|---:|---:|---:|---:|---:|
+| 50K | 559.9 | **121.3** | 953.0 | 213.8 | 171 |
+| 100K | 925.2 | **122.1** | 969.7 | 391.4 | 313 |
+| 250K | 976.1 | **225.1** | 979.5 | 675.5 | 540 |
+| 500K | 972.7 | **305.5** | 974.3 | **878.7** | — |
+
+1. **proprio 混淆被自建对照钉死**：`proprio_only` 974.3 vs `slots+proprio` 972.7，
+   **差 1.6 分**。2048 维 slot 特征的边际贡献在噪声内。不再需要引官方数字。
+2. **纯视觉 E2E-0 判据全线不通过**：500K 时 0.35×，判据 ≥0.8×，四个点位全不过。
+3. **冻结 slot 表征显著劣于原始像素**（305 vs 879），是倒退 2.9 倍，不是无增益。
+
+### 根因（详见 `TODO_RESULT.md` §R4.9）
+
+ckpt 实读 `slot_init_mode = shared`。`stage1.py:160` 自己的注释就写了该模式
+**「slots do NOT track objects across frames」**，且训练时算 slow loss 前要先
+`match_slots_nn` 做最近邻匹配 —— 说明 slot 下标跨帧无对应关系。
+
+**而 E2E-0 的 `flatten(S_fg)` 是按固定下标拼接的，对置换敏感。接口不匹配。**
+
+`slot_feature_diagnosis.json`（300 步实测，`diag_slot_features.py` 可重跑）：
+
+```
+same_slot_is_nearest      0.490    只有一半 slot 在下一帧仍是自己的最近邻
+corr(Δobs, Δproprio)      0.035    观测变化与物理状态变化几乎零相关
+corr(Δ未门控, Δproprio)    0.077    去掉门控也一样 → 问题在 slot 不在路由
+每步跳变维度              465/2048
+```
+
+TD-MPC2 全部机制建立在「能从 (z_t,a_t) 预测 z_{t+1}」上。相关性 0.035 意味着
+world model 的学习目标本身不可学。**305 分是可解释的。**
+
+**重要推论**：`flatten` 是 E2E-0 独有的读出方式。E2E-1 的 binding transformer
+用注意力处理 slot 集合，**对置换等变**，原理上免疫本失败模式。
+**不能从 E2E-0 失败推出方法失败。**
+
+---
+
+## 关于 `e2e0_s*` 那三条曲线
+
+**不能读作 HippoAct 赢。**
 
 `proprio_reference.csv` 是 TD-MPC2 官方发布的 state-obs walker-walk 曲线
 （`third_party/tdmpc2/results/tdmpc2/walker-walk.csv`，3 seed，env step 已

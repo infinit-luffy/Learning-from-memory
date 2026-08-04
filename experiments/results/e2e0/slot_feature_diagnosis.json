@@ -1,0 +1,47 @@
+{
+  "ckpt": "/usr1/home/s125mdg56_03/Learning-from-memory/hippoact/outputs/stage1_seed1/ckpt_final.pt",
+  "difficulty": "easy",
+  "steps": 300,
+  "gate": {
+    "num_slots": 16,
+    "fast_slots_per_frame_mean": 11.05,
+    "fast_slots_per_frame_min": 6,
+    "fast_slots_per_frame_max": 15,
+    "zero_fraction_of_obs": 0.30937499999999996,
+    "slot_gate_flips_per_step_mean": 3.6354515050167224,
+    "frames_with_any_flip": 0.9866220735785953,
+    "dims_zeroed_or_revived_per_step": 465.33779264214047
+  },
+  "jump": {
+    "obs_delta_mean": 62.15979766845703,
+    "obs_delta_on_flip_steps": 62.230613708496094,
+    "obs_delta_on_stable_steps": 56.93724060058594,
+    "ungated_slot_delta_mean": 64.64726257324219,
+    "proprio_delta_mean": 29.89857003008456,
+    "corr_obs_delta_vs_proprio_delta": 0.03521346799382457,
+    "corr_ungated_delta_vs_proprio_delta": 0.0769510824366266
+  },
+  "identity": {
+    "same_slot_is_nearest_mean": 0.48975752508361203,
+    "mean_pairwise_slot_distance": 26.382963180541992,
+    "mean_slot_norm": 20.61368751525879
+  },
+  "per_slot_fast_rate": [
+    0.753,
+    0.927,
+    0.463,
+    0.3,
+    0.983,
+    0.997,
+    0.92,
+    0.82,
+    0.71,
+    0.017,
+    0.777,
+    0.86,
+    0.727,
+    0.51,
+    0.547,
+    0.74
+  ]
+}
