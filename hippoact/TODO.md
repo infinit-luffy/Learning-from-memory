@@ -177,6 +177,45 @@ E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
 R4.9.6 评测路由修法确认（HippoAct 臂一律走 dcs-none-*）。
 "宽度恰好不同才炸出来" 已录入 Diagnostic Protocol 案例。
 
+## ⚡ R4.10 拍板（2026-08-04 晚，cowork）—— E2E-1 终版设计，最后一搏 DCS
+
+**认账**：R4.9 的"置换是根因"判断被 R4.10 的预注册测试推翻，
+论文 §IV.I 已改写为完整的"假设→测试→推翻→修订"叙事（这本身成了
+Diagnostic Protocol 的 worked example）。预注册纪律零 GPU 损失地
+拦下了两条错误路线——这是它存在的意义。
+
+确认：Ruling 1（E2E-0p）撤销不起跑；A 线关闭；proprio_only 0.999
+把"invariance 在 locomotion 上平凡"钉死（§IV.C 协议已预防）。
+
+### E2E-1 终版设计（唯一在跑的 DCS 线）
+
+**本质是原 §III.E binding transformer T 窗设计的 vision-only 回归**：
+
+- env 侧：产出 **3 帧堆叠的 slot 集合** (3×16, 128)（与 pixel 基线
+  num_frames=3 口径一致，补 Markov 性）
+- 模型侧 encoder：BindingTransformer（4 层，可训，置换等变，
+  时间位置编码区分帧、slot 维无位置编码）→ mean pool → SimNorm → z
+- smoke：帧内 slot 顺序打乱 → z 逐位不变；帧序打乱 → z 必须改变
+  （时间编码生效的证据）
+- 预注册判据：
+  a. 多点位 0.8× pixel 沿用（50K≥171 / 100K≥313 / 250K≥540 / 500K≥703）
+  b. **诊断判据（新）**：训练后在 binding 输出 z 上线性探针速度，
+     R² 应显著 > 0（时间融合学到运动的直接证据；E2E-0 的冻结特征
+     堆帧后仍 ≈0，这是可训练性假设的可证伪检验）
+- 3 seeds（Stage-1 seed 1/3/5 沿用），~5.5h/run
+
+**风险与后路（预先写明）**：E2E-1 若仍远低于 pixel，DCS 上的 claim 4
+即告失败。fallback = experiment_sanity_review 预案：论文主轴收缩为
+claim 1-3 + §IV.I 双 negative（时间路由反转 + frozen-readout 序列），
+Q2 如实报 mixed，**claim 4 的希望全部转移到 Meta-World**（操作任务
+物体位姿只能从视觉来，fast slots 的设计初衷即在此）。
+
+### MW 线（并行，权重再上调）
+
+MW spec（2f55721）待 cowork 审。E2E-1 跑的同时把 MW 环境接通 +
+Stage-1 on MW 帧的采集脚本备好。**无论 E2E-1 成败 MW 都要跑**——
+它才是完整方法（vision+proprio 融合）的正当战场。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
