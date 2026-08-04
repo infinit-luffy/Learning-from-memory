@@ -2118,3 +2118,92 @@ walker-walk 是运动控制任务，单帧对它**在原理上就不是 Markov �
    探针显示单帧位置 R²=0.716 已相当高，说明**瓶颈不在特征信息量，
    在如何把它变成可预测的动力学**，这正是可训练 binding transformer 的用武之地。
    建议同时把**帧堆叠**加进 E2E-1（补上 Markov 性，且与 pixel 基线口径一致）。
+
+---
+
+# R4.11 E2E-1 实现 + **预注册**（常备规则 7）—— 起跑于 2026-08-04 11:36
+
+TODO §R4.10 拍板终版的逐条实现。**DCS 上唯一在跑的线。**
+3 seed（Stage-1 seed 1/3/5，RL seed 均为 1），gpu0/1/2，~5.6 h/run。
+
+## R4.11.1 预注册（起跑前写定，事后不得改）
+
+| 点位 | 判据 a：0.8× pixel 同点位 | pixel 实测 | E2E-0 纯视觉实测 |
+|---:|---:|---:|---:|
+| 50K | **≥ 171** | 213.8 | 121.3 ✗ |
+| 100K | **≥ 313** | 391.4 | 122.1 ✗ |
+| 250K | **≥ 540** | 675.5 | 225.1 ✗ |
+| 500K | **≥ 703** | 878.7 | 305.5 ✗ |
+
+**判据 b（诊断，可证伪）**：训练后在 binding 输出 `z` 上做线性探针预测
+9 维速度，**R² 应显著 > 0**。
+
+判据 b 是这轮的关键设计：E2E-0 的冻结特征即使堆 3 帧，速度探针仍是
+**R² ≈ 0.00**（§R4.10.3 表）。所以「可训练的时间融合能学到冻结特征上
+线性不可得的运动信息」是一个**可以被证伪的**预测，而不是事后解释。
+若 a 过而 b 不过，说明收益另有来源，届时如实记录。
+
+**失败后路（拍板预先写明，此处存档）**：E2E-1 若仍远低于 pixel，
+DCS 上 claim 4 即告失败 → 论文主轴收缩为 claim 1-3 + §IV.I 双 negative，
+Q2 如实报 mixed，claim 4 的希望全部转移到 Meta-World。
+
+## R4.11.2 与 `e2e0vis` 的差异恰好两条
+
+其余逐字相同（同 Stage-1 ckpt、同 RL seed、同 500K、同 slot_init_seed=0）：
+
+1. **env 发 3 帧堆叠 + fast/slow mask**（6192 维），补 Markov 性。
+   帧数 3 与 pixel 基线 `Pixels(env, cfg, num_frames=3)` 口径一致。
+2. **TD-MPC2 的 state encoder 换成可训练的 `VisionBindingEncoder`**：
+   4 层，置换等变，时间位置编码、**slot 维无位置编码** → masked mean pool
+   → SimNorm（§R4.6.3 教训：dynamics/reward/Q 都建在单纯形 latent 上）。
+
+一个刻意的设计选择：**发 mask 而不是把 slow slot 置零。**
+零向量在 transformer 里仍是被注意的 token，masked 的才是真排除 ——
+这才是 §III.E「slow slots excluded via key-padding mask」的原意，
+也是 slot-swap augmentation 成立的前提。
+
+## R4.11.3 最小核心改动：`layers.enc()` 里一处分支
+
+`obs=state` 保持不变，所以 `encode()` / `next()` / MPPI / buffer
+**全部零改动** —— 与 E2E-0 快路径同一个思路。DINOv2 仍每 env step 只跑一次。
+
+## R4.11.4 验证（`experiments/scripts/smoke_e2e1.py`，7/7）
+
+```
+slot 置换 → z 逐位不变        max|Δ| = 2.98e-07
+帧序置换 → z 改变             max|Δ| = 1.44e-02
+obs 维度 == encoder in_dim    6192
+reset 填窗 / step 滑窗
+mask 二值且非平凡             fast 占比 0.67
+env 吞吐                      82 SPS
+```
+
+前两条互相拉扯（一个要求不变、一个要求改变），过一条不构成另一条的证据。
+
+8000 步真实训练跑通。**稳态 24.7 SPS**（I:5,500→7,500 用 81 s）→ ~5.6 h/500K。
+
+## R4.11.5 途中的 segfault —— 修在根因上，没有退回 `compile=false`
+
+我给全掩码行写的 NaN 守卫：
+
+```python
+if all_masked.any():
+    key_padding = key_padding.clone()
+    key_padding[all_masked, 0] = False
+```
+
+**数据依赖控制流 + 原地索引赋值**，在 inductor 的 cudagraph backward 里
+必 segfault（torch 2.x，`cudagraph_trees.py:_backward_impl`，~2500 步后复现）。
+
+改成无分支：`key_padding & ~key_padding.all(dim=1, keepdim=True)`。
+
+两条**没有**采取的路：退回 `compile=false`（会掩盖真因 + 损失吞吐）、
+删掉守卫（NaN 会静默传遍整个 world model）。
+同一条命令原先 8000 步内必崩，改后跑完并 `Training completed successfully`。
+
+语义上全掩码行从「只放行 token 0」变成「全部可见」，在退化输入上更合理。
+
+## R4.11.6 当前状态
+
+起跑 11:36，11:50 时三个 run 均在 ~8.5K 步。预计 **17:30 前后**完成。
+完成后按判据 a/b 评测，并接 {none, easy, hard} 零样本网格。
