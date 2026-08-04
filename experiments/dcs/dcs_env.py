@@ -133,6 +133,8 @@ def make_env(cfg):
         env = HippoActSlots(env, str(cfg.hippoact_precompute),
                             size=int(cfg.get("hippoact_image_size", 224)),
                             slot_init_seed=int(cfg.get("hippoact_slot_init_seed", 0)),
-                            include_proprio=bool(cfg.get("hippoact_include_proprio", True)))
+                            include_proprio=bool(cfg.get("hippoact_include_proprio", True)),
+                            num_frames=int(cfg.get("hippoact_num_frames", 1)),
+                            emit_mask=bool(cfg.get("hippoact_emit_mask", False)))
     env = Timeout(env, max_episode_steps=500)
     return env

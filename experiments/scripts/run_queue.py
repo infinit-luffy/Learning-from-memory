@@ -128,7 +128,7 @@ STAGE1_CKPT = (PROJECT_ROOT / "hippoact" / "outputs"
 
 
 def build_cmd(job, gpu):
-    if job.get("runner") == "e2e0":
+    if job.get("runner") in ("e2e0", "e2e1"):
         # W2.1 E2E-0 fast path: the frozen encoder lives in the env, so
         # TD-MPC2 runs with plain `obs=state` and no modification at all.
         # The Stage-1 seed comes from the exp_name suffix (e2e0_s3 -> seed 3)
@@ -138,6 +138,14 @@ def build_cmd(job, gpu):
         ckpt = str(STAGE1_CKPT).format(seed=m.group(1))
         assert Path(ckpt).exists(), f"missing Stage-1 checkpoint {ckpt}"
         hydra_dir = LAUNCH_DIR / "logs" / "hydra" / f"{job['task']}_s{job['seed']}_{job['exp_name']}"
+        # E2E-1 (TODO §R4.10): same frozen extractor in the env, but it emits a
+        # 3-frame stack plus the fast/slow mask, and TD-MPC2's state encoder is
+        # swapped for the trainable permutation-equivariant binding transformer.
+        # Vision-only is not optional here -- on locomotion proprio is the full
+        # state (§R4.8), so Q2 would be vacuous with it.
+        e2e1 = ["encoder_type=hippoact_binding", "hippoact_num_frames=3",
+                "hippoact_emit_mask=true", "hippoact_include_proprio=false"] \
+            if job["runner"] == "e2e1" else []
         return [
             PYTHON, str(TRAIN_PY),
             f"task={job['task']}",
@@ -155,7 +163,7 @@ def build_cmd(job, gpu):
             "save_agent=true",
             "eval_freq=25000",
             f"hydra.run.dir={hydra_dir}",
-        ] + job.get("extra", [])
+        ] + e2e1 + job.get("extra", [])
     if job.get("runner") == "drqv2":
         # `steps` is agent steps for both runners; DrQ-v2 counts frames.
         task, distraction = job["task"].rsplit("__", 1)
@@ -194,7 +202,7 @@ def build_cmd(job, gpu):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--jobs", required=True)
-    ap.add_argument("--runner", default="tdmpc2", choices=["tdmpc2", "drqv2", "e2e0"],
+    ap.add_argument("--runner", default="tdmpc2", choices=["tdmpc2", "drqv2", "e2e0", "e2e1"],
                     help="drqv2 job task field is '<domain>_<task>__<distraction>'")
     ap.add_argument("--gpus", default="0,1")
     ap.add_argument("--slots-per-gpu", type=int, default=3)

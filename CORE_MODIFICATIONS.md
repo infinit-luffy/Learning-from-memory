@@ -32,3 +32,45 @@
   `dm_control.suite.load`，与裸名字是同一环境），没有改 TD-MPC2。
 - Validation: 四个臂的 none/hard 路由逐个打印验证；已重新起 Q2 评测。
 - Remaining risk: 无。pixel 基线的「与官方逐位一致」性质未变。
+
+## Modification: E2E-1 —— 可训练置换等变 binding readout + 3 帧堆叠
+
+- Location: `hippoact/encoders/binding.py`（新增 `VisionBindingEncoder`）、
+  `hippoact/adapters/slot_features.py`（新增 `slots_and_mask`）、
+  `experiments/dcs/hippoact_slots.py`（帧堆叠 + 发 mask）、
+  `experiments/dcs/dcs_env.py`（透传）、
+  `third_party/tdmpc2/tdmpc2/common/layers.py`（`enc()` 里一处分支）、
+  `config.yaml`、`run_queue.py`（e2e1 runner）
+- Change: env 侧发 3 帧堆叠的 slot 集合 + fast/slow mask（6192 维）；
+  TD-MPC2 的 state encoder 换成 4 层置换等变 binding transformer
+  → masked mean pool → SimNorm。
+- Reason: TODO §R4.10 拍板。E2E-0 的冻结 flatten readout 只到 0.35× pixel；
+  瓶颈不在特征信息量（位姿探针 R²=0.716 > DINOv2 的 0.648），
+  在于把它变成可预测的动力学 + 单帧不是 Markov 状态（§R4.10.4）。
+- Problem solved: 同时补上可训练读出与 Markov 性。
+- Broader change avoided: **只在 `layers.enc()` 加了一处分支**。
+  `obs=state` 不变 → `encode()` / `next()` / MPPI / buffer 全部零改动，
+  与 E2E-0 快路径同一个思路。DINOv2 仍每 env step 只跑一次。
+- Validation: `smoke_e2e1.py` 7/7 通过 —— slot 置换 z 不变（max|Δ|=2.98e-07）、
+  帧序置换 z 改变（1.44e-02）、obs 维度对齐 6192、reset 填窗、
+  step 滑窗、mask 二值非平凡、吞吐 82 SPS。
+  8000 步真实训练跑通；稳态 24.7 SPS → ~5.6 h/500K。
+- Remaining risk: 若 E2E-1 仍远低于 pixel，DCS 上 claim 4 失败
+  （拍板已预写 fallback：论文收缩为 claim 1-3 + §IV.I 双 negative，
+  claim 4 转移到 Meta-World）。
+
+## Modification: binding 的 NaN 守卫必须无分支
+
+- Location: `hippoact/encoders/binding.py` `VisionBindingEncoder.forward`
+- Change: `if all_masked.any(): key_padding[all_masked, 0] = False`
+  → `key_padding & ~key_padding.all(dim=1, keepdim=True)`
+- Reason: 前者是数据依赖控制流 + 原地索引赋值，在 inductor 的 cudagraph
+  backward 里 **segfault**（torch 2.x，`cudagraph_trees.py:_backward_impl`，
+  ~2500 步后必现）。
+- Problem solved: 保住全掩码行的 NaN 守卫，同时可被 cudagraph 捕获。
+- Broader change avoided: **没有退回 `compile=false`** —— 那会掩盖真因
+  并损失吞吐。也没有删掉守卫。
+- Validation: 同一命令原先 8000 步内必 segfault，改后跑完 8000 步
+  （`Training completed successfully`），smoke 7/7 仍通过。
+- Remaining risk: 无。语义上全掩码行改为「全部可见」而非「只放行 token 0」，
+  在退化输入上更合理。

@@ -30,6 +30,8 @@ adding a module and unfreezing the encoder at the same time).
 """
 from __future__ import annotations
 
+from collections import deque
+
 import gymnasium as gym
 import numpy as np
 import torch
@@ -42,7 +44,8 @@ class HippoActSlots(gym.Wrapper):
 
     def __init__(self, env, stage1_ckpt: str, device: str = "cuda",
                  size: int = HIPPOACT_IMAGE_SIZE, slot_init_seed: int = 0,
-                 include_proprio: bool = True):
+                 include_proprio: bool = True, num_frames: int = 1,
+                 emit_mask: bool = False):
         super().__init__(env)
         import sys
         from pathlib import Path
@@ -69,22 +72,49 @@ class HippoActSlots(gym.Wrapper):
         # E2E-0 then tracks the proprio-only baseline exactly. `include_proprio
         # = False` gives the vision-only control this comparison needs.
         self._include_proprio = include_proprio
+        # E2E-1: a single frame is not a Markov state for locomotion — the
+        # pixel baseline is `Pixels(env, cfg, num_frames=3)` and the state obs
+        # carries 9 velocity dims, while E2E-0 vision-only had neither
+        # (TODO §R4.10.4). Stacking here matches the pixel baseline's window.
+        self._num_frames = int(num_frames)
+        # E2E-1 also needs the routing decision itself, so the binding
+        # transformer can *mask* slow slots out of attention rather than see
+        # them as zero tokens. E2E-0 only ever needed the gated vector.
+        self._emit_mask = bool(emit_mask)
+        self._frames = deque(maxlen=self._num_frames)
+
+        K = self.extractor.num_slots
         proprio_dim = int(env.observation_space.shape[0]) if include_proprio else 0
-        self._dim = self.extractor.feature_dim + proprio_dim
+        per_frame = self.extractor.feature_dim + (K if emit_mask else 0)
+        self._dim = self._num_frames * per_frame + proprio_dim
         self.observation_space = gym.spaces.Box(
             low=-np.inf, high=np.inf, shape=(self._dim,), dtype=np.float32)
 
-    def _obs(self, state) -> torch.Tensor:
+    def _encode(self) -> torch.Tensor:
+        """One frame -> feature vector (slots [+ fast mask])."""
         frame = self.env.render(width=self._size, height=self._size)   # (S,S,3) uint8
         rgb = torch.from_numpy(np.ascontiguousarray(frame.transpose(2, 0, 1)))
-        feat = self.extractor(rgb.unsqueeze(0).to(self._device)).squeeze(0).cpu()
+        x = rgb.unsqueeze(0).to(self._device)
+        if not self._emit_mask:
+            return self.extractor(x).squeeze(0).cpu()
+        slots, mask = self.extractor.slots_and_mask(x)
+        return torch.cat([slots.squeeze(0).flatten().cpu(),
+                          mask.squeeze(0).float().cpu()])
+
+    def _obs(self, state, is_reset=False) -> torch.Tensor:
+        feat = self._encode()
+        # On reset the window is filled with the first frame, exactly as
+        # TD-MPC2's own `Pixels` wrapper does.
+        for _ in range(self._frames.maxlen if is_reset else 1):
+            self._frames.append(feat)
+        out = torch.cat(list(self._frames))
         if not self._include_proprio:
-            return feat
+            return out
         state = state if torch.is_tensor(state) else torch.from_numpy(state)
-        return torch.cat([feat, state.float()])
+        return torch.cat([out, state.float()])
 
     def reset(self):
-        return self._obs(self.env.reset())
+        return self._obs(self.env.reset(), is_reset=True)
 
     def step(self, action):
         state, reward, done, info = self.env.step(action)

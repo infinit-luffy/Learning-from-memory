@@ -167,5 +167,22 @@ class SlotFeatureExtractor(nn.Module):
         return fast_slots.flatten(1)
 
     @torch.no_grad()
+    def slots_and_mask(self, rgb: torch.Tensor):
+        """(B,3,H,W) -> ((B,K,D) slots, (B,K) fast mask).
+
+        E2E-1's binding transformer needs the two separately: it *masks* slow
+        slots out of attention instead of zeroing them, because a zeroed slot
+        is still a token a transformer attends to.  `compute` above returns the
+        gated-and-flattened form E2E-0 consumes; both come from the same
+        forward pass, so the two paths cannot disagree about routing.
+        """
+        self.call_count += 1
+        init = (self._fixed_init_buf.expand(rgb.shape[0], -1, -1)
+                if self._fixed_init else None)
+        out = self.encoder.encode_frame(self.preprocess(rgb), decode=False,
+                                        slots_init=init)
+        return out.slots, (out.router_logits.argmax(dim=-1) == 1)
+
+    @torch.no_grad()
     def forward(self, rgb: torch.Tensor) -> torch.Tensor:
         return self.compute(rgb)

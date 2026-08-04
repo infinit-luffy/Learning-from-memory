@@ -1,0 +1,21 @@
+# W2.1 E2E-1 —— TODO §R4.10 拍板终版。DCS 上唯一在跑的线。
+#
+# 与 e2e0vis 的差异恰好两条（其余逐字相同：同 Stage-1 seed 1/3/5、RL seed 均为 1）：
+#   1. env 侧发 3 帧堆叠的 slot 集合 + fast/slow mask
+#      （与 pixel 基线 Pixels(num_frames=3) 口径一致，补 Markov 性 —— §R4.10.4）
+#   2. TD-MPC2 的 state encoder 换成可训练、置换等变的 BindingTransformer
+#      （4 层，时间位置编码，slot 维无位置编码）→ masked mean pool → SimNorm
+#
+# 纯视觉，无 proprio —— locomotion 上 proprio 是全状态（§R4.8）。
+#
+# 预注册判据：
+#   a. 多点位 0.8× pixel：50K≥171 / 100K≥313 / 250K≥540 / 500K≥703
+#   b. 诊断判据：训练后在 z 上线性探针速度，R² 应显著 > 0
+#      （E2E-0 的冻结特征堆 3 帧后仍 ≈0.00 —— 这是可训练性假设的可证伪检验）
+#
+# 实测吞吐 24.7 SPS（稳态）→ ~5.6 h/run。
+#
+# task                     seed  steps   exp_name
+dcs-easy-walker-walk         1  500000  e2e1_s1
+dcs-easy-walker-walk         1  500000  e2e1_s3
+dcs-easy-walker-walk         1  500000  e2e1_s5
