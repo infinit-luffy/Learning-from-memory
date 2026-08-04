@@ -148,6 +148,35 @@ E2E-0 判据通过 → gpu0 立刻接 E2E-0 补 2 个 seed + E2E-1。
 官方 10-seed 并入基线后干扰效应显著（25%→78%, Fisher p=0.016）。
 论文引官方曲线，无需排查清单。
 
+## ⚡ R4.9 拍板（2026-08-04，cowork）—— E2E-0p + E2E-1 并行
+
+**认账**：E2E-0 flatten 契约是 cowork 定的，其置换敏感性在砍掉跨帧身份时
+就已注定（训练侧 NN-matching 置换容忍 vs 消费侧 flatten 置换敏感 = 接口
+不匹配）。agent 的根因诊断（same_slot_is_nearest 0.49、corr(Δobs,Δproprio)
+0.035 → world model 不可学）全盘接受。R4.9.4 推论成立：不能从 E2E-0 失败
+推方法失败。
+
+执行（三线并行）：
+1. **E2E-0p（立即，3 卡）**：契约修订为置换不变读出
+   `z = MLP( mean(S_fg) )`（DCS vision-only，无 proprio）。
+   一行改动零训练。预注册：corr(Δobs,Δproprio) 应恢复到 >0.3
+   （先用 diag_slot_features.py 量过再起跑——训练前先量数据）；
+   判据沿用 pixel 同点位 0.8×。
+2. **E2E-1（实现后立即，第 4 张卡 + 依次）**：
+   - env 侧：产出 (16,128) slot 矩阵（不 flatten），DINOv2+slot attention
+     仍冻结缓存（保 25 SPS）
+   - 模型侧：encoder = BindingTransformer（4层、置换等变、可训）
+     → mean pool → **SimNorm**（R4.6.3 教训）→ z
+   - DCS vision-only：无 proprio token；binding 的输入只有 slot 集合
+   - update 时 1024×(16×128) 的 transformer 前向 ~ms 级，吞吐无忧
+   - smoke：置换测试——slot 顺序打乱后 z 必须逐位不变（pool 后严格成立）
+3. **A 线只做前置测量（零成本）**：现有 ckpt 用 carryover_norm 推理重跑
+   diag_slot_features.py。same_slot_is_nearest 显著上升 → 记录为期刊版
+   路线；否则关闭。**ICRA 时间内不重训 Stage-1。**
+
+R4.9.6 评测路由修法确认（HippoAct 臂一律走 dcs-none-*）。
+"宽度恰好不同才炸出来" 已录入 Diagnostic Protocol 案例。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
