@@ -179,6 +179,76 @@
     "seed": 3,
     "train_task": "dcs-easy-cheetah-run"
   },
+  "dcs-easy-walker-walk|1|easy|e2e0_s1": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 363.4,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0_s1",
+    "reward": 976.5,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|e2e0_s3": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 331.8,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0_s3",
+    "reward": 976.5,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|e2e0_s5": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 317.8,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0_s5",
+    "reward": 975.1,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|e2e0vis_s1": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 538.9,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0vis_s1",
+    "reward": 247.0,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|e2e0vis_s3": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 435.0,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0vis_s3",
+    "reward": 281.8,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|e2e0vis_s5": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 415.0,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "e2e0vis_s5",
+    "reward": 319.8,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|easy|proprio_only": {
+    "difficulty": "easy",
+    "episodes": 30,
+    "eval_seconds": 394.9,
+    "eval_task": "dcs-easy-walker-walk",
+    "exp_name": "proprio_only",
+    "reward": 977.1,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
   "dcs-easy-walker-walk|1|easy|w12_pixel": {
     "difficulty": "easy",
     "episodes": 30,
@@ -189,6 +259,76 @@
     "seed": 1,
     "train_task": "dcs-easy-walker-walk"
   },
+  "dcs-easy-walker-walk|1|hard|e2e0_s1": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 325.6,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0_s1",
+    "reward": 974.0,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|e2e0_s3": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 364.0,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0_s3",
+    "reward": 975.9,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|e2e0_s5": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 331.1,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0_s5",
+    "reward": 975.6,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|e2e0vis_s1": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 501.2,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0vis_s1",
+    "reward": 213.3,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|e2e0vis_s3": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 442.3,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0vis_s3",
+    "reward": 208.2,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|e2e0vis_s5": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 465.9,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "e2e0vis_s5",
+    "reward": 239.6,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|hard|proprio_only": {
+    "difficulty": "hard",
+    "episodes": 30,
+    "eval_seconds": 397.2,
+    "eval_task": "dcs-hard-walker-walk",
+    "exp_name": "proprio_only",
+    "reward": 975.9,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
   "dcs-easy-walker-walk|1|hard|w12_pixel": {
     "difficulty": "hard",
     "episodes": 30,
@@ -196,6 +336,76 @@
     "eval_task": "dcs-hard-walker-walk",
     "exp_name": "w12_pixel",
     "reward": 540.8,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0_s1": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 232.1,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0_s1",
+    "reward": 976.3,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0_s3": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 237.4,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0_s3",
+    "reward": 974.9,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0_s5": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 225.4,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0_s5",
+    "reward": 976.2,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0vis_s1": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 337.2,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0vis_s1",
+    "reward": 172.5,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0vis_s3": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 325.7,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0vis_s3",
+    "reward": 226.9,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|e2e0vis_s5": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 269.5,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "e2e0vis_s5",
+    "reward": 289.1,
+    "seed": 1,
+    "train_task": "dcs-easy-walker-walk"
+  },
+  "dcs-easy-walker-walk|1|none|proprio_only": {
+    "difficulty": "none",
+    "episodes": 30,
+    "eval_seconds": 221.5,
+    "eval_task": "dcs-none-walker-walk",
+    "exp_name": "proprio_only",
+    "reward": 975.9,
     "seed": 1,
     "train_task": "dcs-easy-walker-walk"
   },

@@ -1,0 +1,93 @@
+{
+  "ckpt": "/usr1/home/s125mdg56_03/Learning-from-memory/hippoact/outputs/stage1_seed1/ckpt_final.pt",
+  "difficulty": "easy",
+  "steps": 1500,
+  "split": "random",
+  "train_frames": 1050,
+  "test_frames": 450,
+  "lambda_grid": [
+    0.01,
+    0.1,
+    1.0,
+    10.0,
+    100.0,
+    1000.0,
+    10000.0,
+    100000.0
+  ],
+  "best_lambda": {
+    "flatten_fast (E2E-0, 1 frame)": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 1000.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "mean_over_fast (E2E-0p, 1 frame)": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 10.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "mean_all_slots (1 frame)": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 10.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "DINOv2 patch mean (control, 1 frame)": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 100.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "flatten_fast x2 frames": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 1000.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "flatten_fast x3 frames (= pixel stack)": {
+      "proprio_all(24)": 100000.0,
+      "proprio_pos(15)": 1000.0,
+      "proprio_vel(9)": 100000.0
+    },
+    "mean_over_fast x3 frames": {
+      "proprio_all(24)": 1000.0,
+      "proprio_pos(15)": 100.0,
+      "proprio_vel(9)": 1000.0
+    }
+  },
+  "note": "best test R^2 over the lambda sweep = optimistic upper bound",
+  "probe_r2": {
+    "flatten_fast (E2E-0, 1 frame)": {
+      "proprio_all(24)": 0.0007,
+      "proprio_pos(15)": 0.7164,
+      "proprio_vel(9)": -0.0048
+    },
+    "mean_over_fast (E2E-0p, 1 frame)": {
+      "proprio_all(24)": -0.0005,
+      "proprio_pos(15)": 0.6336,
+      "proprio_vel(9)": -0.0022
+    },
+    "mean_all_slots (1 frame)": {
+      "proprio_all(24)": 0.0001,
+      "proprio_pos(15)": 0.6288,
+      "proprio_vel(9)": -0.0019
+    },
+    "DINOv2 patch mean (control, 1 frame)": {
+      "proprio_all(24)": -0.0,
+      "proprio_pos(15)": 0.6476,
+      "proprio_vel(9)": -0.0031
+    },
+    "flatten_fast x2 frames": {
+      "proprio_all(24)": 0.0102,
+      "proprio_pos(15)": 0.7088,
+      "proprio_vel(9)": 0.0042
+    },
+    "flatten_fast x3 frames (= pixel stack)": {
+      "proprio_all(24)": 0.0073,
+      "proprio_pos(15)": 0.7216,
+      "proprio_vel(9)": 0.0006
+    },
+    "mean_over_fast x3 frames": {
+      "proprio_all(24)": 0.0349,
+      "proprio_pos(15)": 0.6549,
+      "proprio_vel(9)": 0.0279
+    }
+  }
+}
