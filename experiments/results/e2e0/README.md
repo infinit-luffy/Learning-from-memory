@@ -106,8 +106,8 @@ agent step   50K    100K   200K   250K   500K
 
 1. **步数单位**：这些 CSV 的 `step` 是 agent step；官方 CSV 是 env step（2×）。
    `proprio_reference.csv` 已经换算过，其余官方数据没有。
-2. **`e2e0vis` / `proprio_only` 仍在训练**（起跑于 2026-08-04 01:55），
-   `progress.json` 记录导出时各自到了第几步。曲线未跑完时表里显示 `—`。
+2. **7 个 run 已全部跑完 500K**（2026-08-04 09:46）。`progress.json` 记录
+   导出时各自到了第几步；`export_e2e0.py` 训练途中也可跑，未跑到的点显示 `—`。
 3. **slot init seed 是编码器身份的一部分**：seed 0 vs 1 让特征差 max|Δ|=16.2
    （§R4.6.4）。全部 run 用 `hippoact_slot_init_seed=0`，记在每个 run 的
    hydra config 和 console banner 里。
