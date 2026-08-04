@@ -216,6 +216,29 @@ MW spec（2f55721）待 cowork 审。E2E-1 跑的同时把 MW 环境接通 +
 Stage-1 on MW 帧的采集脚本备好。**无论 E2E-1 成败 MW 都要跑**——
 它才是完整方法（vision+proprio 融合）的正当战场。
 
+## ⚡ MW spec 审阅拍板（2026-08-04，cowork）
+
+spec 通过，四条决定：
+
+1. **任务**：暂定 pick-place-v2 + drawer-open-v2，**严格以 §7.2 渲染
+   肉眼检查为准**。目标球在 corner2 不可见 → 从候补顺位替换：
+   door-open-v2 → push-v2 → button-press-topdown-v2。
+   规则：渲染检查通过的前两个，事先声明不按结果挑。
+2. **metaworld 版本**：2.0.0（反正要自己写视觉 wrapper，state-obs 老路
+   不用）。**隔离 venv 硬性要求批准**——装完必须重跑 setup_env.sh 断言
+   确认 DCS 侧 gymnasium/numpy 未动。
+3. **Stage-1 on MW**：必须重训（桌面操作与 locomotion 域差太大）。
+   **先 1 seed**（8.4h）+ 连通性判据 gate（W1.1 的 MW 版：物体+机械臂
+   富集 ≥3×，用 MuJoCo 分割渲染做真值——geom id 应能区分 arm/object/table）。
+   过 gate 再谈 E2E；方差已由 R4.7 量过，时间紧不做 3 seed 起步。
+4. **cheetah E2E（spec §9）**：拍板 (a) 复用 walker encoder，跨域迁移
+   作为顺带测量、声明变量。若明显差 → "per-domain Stage-1 必要"本身
+   是 finding。优先级排 MW 之后；若时间不够 cheetah 整线可砍
+   （Q2 收缩为 walker + MW 两域也成立）。
+
+执行顺序：E2E-1 结果出来前，做 spec §7 三件零 GPU 事
+（隔离 venv / 渲染检查 / 切片 wrapper smoke）。
+
 ## Week 2 — 最小端到端
 
 ### W2.1 E2E-0：最小可行 HippoAct（5080 调通 → A5000 跑）
